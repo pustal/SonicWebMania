@@ -2,7 +2,7 @@
 
 # SonicWebMania
 
-**Version 1.0.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+**Version 1.0.1** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
 and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations,
 built as a **native** webOS app (SDL2), with a few TV-friendly extras:
 
@@ -12,8 +12,11 @@ built as a **native** webOS app (SDL2), with a few TV-friendly extras:
 - **Save transfer.** The same page lists your saves for download, and lets you upload
   saves from another device.
 - **Plays with the remote.** Controllers work as usual; the remote is mapped too (below).
-- **Back opens a small menu** at any time: Resume, Restart game, Close app. It also shows
-  the transfer address and this project's page.
+- **Back opens a small menu** at any time: Resume, Achievements, Button test, Restart game,
+  Close app. It also shows the transfer address and this project's page.
+- **Achievements.** The game's 18 achievements unlock as you play (the decompilation's
+  engine records them in `Achievements.bin`, next to your saves). The menu lists them all,
+  unlocked and locked, with how to get each one.
 - **Light on storage.** Uploads are streamed straight to disk, free space is checked
   before anything is written, and the engine's log is off.
 
@@ -26,7 +29,11 @@ the menu is a stand-in drawn for the screenshot, where the paused game would be.
 
 | First launch on the TV | Back menu during play |
 |---|---|
-| <img src="docs/images/setup-screen.png" alt="Setup screen with address, PIN, free space and upload progress" width="420"> | <img src="docs/images/menu.png" alt="Pause menu with Resume, Restart game and Close app" width="420"> |
+| <img src="docs/images/setup-screen.png" alt="Setup screen with address, PIN, free space and upload progress" width="420"> | <img src="docs/images/menu.png" alt="Pause menu with Resume, Achievements, Button test, Restart game and Close app" width="420"> |
+
+| Achievements | Button test |
+|---|---|
+| <img src="docs/images/achievements.png" alt="Achievement list with unlocked ones highlighted and the selected one's description" width="420"> | <img src="docs/images/button-test.png" alt="Button test showing each press and the game button it becomes" width="420"> |
 
 | Transfer page: PIN | Transfer page: data, saves and settings |
 |---|---|
@@ -51,6 +58,11 @@ controller's buttons of the same colour:
 In the port menu, use 6/4 or the arrows to move, OK/0/Green to choose, Back/Red to resume.
 On a controller, the Guide or View/Back button opens the menu; A chooses, B resumes.
 The mapping lives in `src/port/RemoteInput.cpp` (`kMappings`).
+
+**Button test** (in the Back menu) shows each press as the TV reports it and the game
+button it becomes, for example `Red (code 486) -> B`. If a button does nothing in the game,
+check it there: a press that doesn't appear at all never reached the app. Quick taps on the
+remote are held for at least a frame, so the game never misses a short press.
 
 ## Transfer page
 
@@ -144,7 +156,9 @@ Escape opens the port menu on a keyboard.
 src/main.cpp                launcher: storage, transfer server, setup screen, then the engine
 src/port/
   WebOSPortHooks.h          the C interface the engine calls (5 functions)
-  PortRuntime.*             implements the hooks: Back menu, notifications, Plus opt-in
+  PortRuntime.*             implements the hooks: Back menu (achievements, button test),
+                            notifications, Plus opt-in
+  Achievements.h            achievement entries the menu shows (read from the engine in main.cpp)
   RemoteInput.*             remote button mapping and menu navigation
   SetupScreen.*             first-run screen (address, PIN, free space, progress)
   TransferServer.*          HTTP server (cpp-httplib) for data and saves

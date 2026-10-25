@@ -21,6 +21,8 @@
 
 #include <SDL.h>
 
+#include <string>
+
 namespace swm
 {
 
@@ -52,6 +54,13 @@ MenuAction ToMenuAction(const SDL_Event &event);
 
 /** Applies the SDL hints that let a native webOS app receive Back/Exit and hide the pointer. */
 void ApplyPlatformHints();
+
+/**
+ * Describes a key or controller press for the button test page, e.g.
+ * "Red (code 486) -> B" or "Pad: a -> A". Returns an empty string for
+ * events that are not presses.
+ */
+std::string DescribePress(const SDL_Event &event);
 
 } // namespace RemoteInput
 } // namespace swm

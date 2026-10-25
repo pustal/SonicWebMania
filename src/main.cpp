@@ -27,6 +27,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <vector>
 
 namespace
 {
@@ -65,6 +66,20 @@ void WriteDefaultSettingsIfMissing(const swm::Storage &storage)
 
     std::ofstream out(path, std::ios::trunc);
     out << kDefaultSettings;
+}
+
+/**
+ * Copies the engine's achievement list for the Back menu. The engine registers
+ * Sonic Mania's achievements at start-up and updates them as the game unlocks
+ * them (saved in Achievements.bin), so this always reflects the current state.
+ */
+std::vector<swm::AchievementEntry> ReadAchievements()
+{
+    std::vector<swm::AchievementEntry> entries;
+    entries.reserve(RSDK::achievementList.size());
+    for (const RSDK::AchievementInfo &info : RSDK::achievementList)
+        entries.push_back(swm::AchievementEntry{ info.name, info.description, info.achieved != 0 });
+    return entries;
 }
 
 /** Same as RSDK_main() in RSDKv5/main.cpp: link the game logic and run the engine loop. */
@@ -118,7 +133,7 @@ int32 main(int32 argc, char *argv[])
 
     server.SetSetupMode(false);
     swm::PortRuntime &runtime = swm::PortRuntime::Instance();
-    runtime.Configure(serverRunning ? &server : nullptr, swm::FindLanAddress(), config.IsPlusEnabled());
+    runtime.Configure(serverRunning ? &server : nullptr, swm::FindLanAddress(), config.IsPlusEnabled(), &ReadAchievements);
 
     const int32 exitCode = RunEngine(argc, argv);
     server.Stop();
