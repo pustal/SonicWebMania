@@ -1,0 +1,15 @@
+{
+    "id": "@SWM_APP_ID@",
+    "version": "@PROJECT_VERSION@",
+    "vendor": "SonicWebMania",
+    "type": "native",
+    "main": "bin/SonicWebMania",
+    "title": "SonicWebMania",
+    "icon": "icon.png",
+    "largeIcon": "largeIcon.png",
+    "iconColor": "#0b1230",
+    "appDescription": "Sonic Mania decompilation (RSDKv5) for webOS. Requires your own game data.",
+    "supportTouchMode": "none",
+    "useAllMouseButtons": false,
+    "requiredACG": []
+}

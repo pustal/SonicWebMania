@@ -1,0 +1,15 @@
+[submodule "external/RSDKv5-Decompilation"]
+	path = external/RSDKv5-Decompilation
+	url = https://github.com/RSDKModding/RSDKv5-Decompilation.git
+[submodule "external/Sonic-Mania-Decompilation"]
+	path = external/Sonic-Mania-Decompilation
+	url = https://github.com/RSDKModding/Sonic-Mania-Decompilation.git
+[submodule "external/ogg"]
+	path = external/ogg
+	url = https://github.com/xiph/ogg.git
+[submodule "external/theora"]
+	path = external/theora
+	url = https://github.com/xiph/theora.git
+[submodule "external/cpp-httplib"]
+	path = external/cpp-httplib
+	url = https://github.com/yhirose/cpp-httplib.git

@@ -1,0 +1,317 @@
+<!doctype html>
+<!--
+  SonicWebMania transfer page.
+  Served by the app itself (src/port/TransferServer.cpp) and embedded into the
+  binary at build time, so it must stay self-contained: no external scripts,
+  fonts or images. Keep it small; it is stored on the TV.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SonicWebMania</title>
+<style>
+  :root { --bg:#0b1230; --card:#141d45; --line:#2a3a7a; --text:#ecedf5; --dim:#9aa3c7; --accent:#5aaaff; --ok:#5ac878; --warn:#ff7a5a; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:640px; margin:0 auto; padding:16px; }
+  h1 { font-size:1.4rem; margin:8px 0 16px; color:#ffd23c; }
+  h2 { font-size:1.05rem; margin:0 0 8px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  p { margin:6px 0; }
+  .dim { color:var(--dim); font-size:.9rem; }
+  .warn { color:var(--warn); }
+  .ok { color:var(--ok); }
+  input[type=text] { font-size:1.4rem; letter-spacing:.3em; width:7em; padding:6px 8px; border-radius:6px; border:1px solid var(--line); background:#0b1230; color:var(--text); }
+  button, label.button { display:inline-block; font:inherit; padding:8px 14px; border-radius:6px; border:0; background:var(--accent); color:#06102a; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  input[type=file] { display:none; }
+  progress { width:100%; height:12px; margin-top:8px; }
+  table { width:100%; border-collapse:collapse; font-size:.92rem; }
+  td { padding:6px 4px; border-top:1px solid var(--line); }
+  td:last-child { text-align:right; }
+  a { color:var(--accent); }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SonicWebMania</h1>
+
+  <section id="pin-section">
+    <h2>Enter the PIN shown on the TV</h2>
+    <form id="pin-form">
+      <input id="pin-input" type="text" inputmode="numeric" maxlength="4" autocomplete="off" required>
+      <button type="submit">Connect</button>
+    </form>
+    <p id="pin-error" class="warn hidden"></p>
+  </section>
+
+  <div id="app" class="hidden">
+    <section>
+      <h2>TV status</h2>
+      <p id="status-line">Loading...</p>
+      <p id="space-line" class="dim"></p>
+      <p id="restart-line" class="warn hidden">Some uploads are waiting. On the TV press BACK and choose "Restart game" to apply them.</p>
+    </section>
+
+    <section>
+      <h2>Game data (Data.rsdk)</h2>
+      <p class="dim">Use the Data.rsdk from your own copy of Sonic Mania (for example the Steam version's install folder).</p>
+      <label class="button" for="data-file">Choose Data.rsdk</label>
+      <input id="data-file" type="file" accept=".rsdk">
+      <progress id="data-progress" class="hidden" max="100" value="0"></progress>
+      <p id="data-message"></p>
+    </section>
+
+    <section>
+      <h2>Saves and settings</h2>
+      <table><tbody id="file-list"></tbody></table>
+      <p class="dim">Uploading replaces the file with the same name. While the game is running, uploads are applied on the next start.</p>
+      <label class="button" for="save-files">Upload saves</label>
+      <input id="save-files" type="file" accept=".bin,.ini" multiple>
+      <p id="save-message"></p>
+    </section>
+
+    <section>
+      <h2>Mania Plus content</h2>
+      <label><input id="plus-toggle" type="checkbox"> Enable Plus content (I own Sonic Mania Plus)</label>
+      <p class="dim">Off by default, as the decompilation's licence requires. Takes effect after a restart.</p>
+    </section>
+  </div>
+</main>
+
+<script>
+'use strict';
+
+/**
+ * @typedef {{ present: boolean, size: number }} DataPackState
+ * @typedef {{ active: boolean, received: number, expected: number }} UploadState
+ * @typedef {{ mode: 'setup'|'game', freeBytes: number, safetyMarginBytes: number, persistent: boolean,
+ *             dataPack: DataPackState, plusEnabled: boolean, restartPending: boolean, upload: UploadState }} Status
+ * @typedef {{ name: string, size: number, mtime: number }} UserFile
+ */
+
+/** Session-only so the PIN is forgotten when the tab closes. */
+const PIN_KEY = 'swm-pin';
+const REFRESH_MS = 2000;
+/** Must match Storage::kMaxUserFileBytes on the TV. */
+const MAX_SAVE_BYTES = 4 * 1024 * 1024;
+
+/** @type {Status | null} */
+let lastStatus = null;
+
+/** @param {string} id @returns {HTMLElement} */
+function byId(id) {
+  const element = document.getElementById(id);
+  if (!element) throw new Error('Missing element #' + id);
+  return element;
+}
+
+/** @param {number} bytes @returns {string} */
+function humanBytes(bytes) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+  return (unit === 0 ? value.toFixed(0) : value.toFixed(1)) + ' ' + units[unit];
+}
+
+/** @returns {string} */
+function pin() { return sessionStorage.getItem(PIN_KEY) || ''; }
+
+/**
+ * Calls the TV's API with the PIN attached.
+ * @param {string} path
+ * @param {RequestInit} [init]
+ * @returns {Promise<Response>}
+ */
+async function api(path, init = {}) {
+  const headers = new Headers(init.headers);
+  headers.set('X-Pin', pin());
+  const response = await fetch(path, { ...init, headers });
+  if (response.status === 401) {
+    sessionStorage.removeItem(PIN_KEY);
+    showPinForm('Wrong PIN. Check the number on the TV.');
+    throw new Error('unauthorised');
+  }
+  return response;
+}
+
+/** @param {string} [error] */
+function showPinForm(error) {
+  byId('pin-section').classList.remove('hidden');
+  byId('app').classList.add('hidden');
+  const message = byId('pin-error');
+  message.textContent = error || '';
+  message.classList.toggle('hidden', !error);
+}
+
+async function refreshStatus() {
+  const response = await api('/api/status');
+  /** @type {Status} */
+  const status = await response.json();
+  lastStatus = status;
+
+  byId('pin-section').classList.add('hidden');
+  byId('app').classList.remove('hidden');
+
+  const statusLine = byId('status-line');
+  if (status.dataPack.present) {
+    statusLine.textContent = 'Game data installed (' + humanBytes(status.dataPack.size) + ').';
+    statusLine.className = 'ok';
+  } else {
+    statusLine.textContent = 'No game data yet. Upload your Data.rsdk below.';
+    statusLine.className = 'warn';
+  }
+
+  byId('space-line').textContent = 'Free space on the TV: ' + humanBytes(status.freeBytes)
+    + (status.persistent ? '' : ' (temporary storage: lost on reboot)');
+  byId('restart-line').classList.toggle('hidden', !status.restartPending);
+  /** @type {HTMLInputElement} */ (byId('plus-toggle')).checked = status.plusEnabled;
+}
+
+async function refreshFiles() {
+  const response = await api('/api/files');
+  /** @type {{ files: UserFile[] }} */
+  const body = await response.json();
+  const list = byId('file-list');
+  list.replaceChildren();
+
+  if (body.files.length === 0) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.textContent = 'No saves yet.';
+    cell.className = 'dim';
+    row.append(cell);
+    list.append(row);
+    return;
+  }
+
+  for (const file of body.files) {
+    const row = document.createElement('tr');
+    const name = document.createElement('td');
+    name.textContent = file.name + ' (' + humanBytes(file.size) + ')';
+    const action = document.createElement('td');
+    const link = document.createElement('a');
+    link.href = '/api/files/' + encodeURIComponent(file.name) + '?pin=' + encodeURIComponent(pin());
+    link.download = file.name;
+    link.textContent = 'Download';
+    action.append(link);
+    row.append(name, action);
+    list.append(row);
+  }
+}
+
+/**
+ * Reads the first bytes of a file to check it really is an RSDK pack before uploading it.
+ * @param {File} file @returns {Promise<boolean>}
+ */
+async function looksLikeDataPack(file) {
+  const header = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+  return String.fromCharCode(...header) === 'RSDK';
+}
+
+/** @param {File} file */
+async function uploadDataPack(file) {
+  const message = byId('data-message');
+  /** @type {HTMLProgressElement} */
+  const progress = /** @type {HTMLProgressElement} */ (byId('data-progress'));
+
+  if (!(await looksLikeDataPack(file))) {
+    message.textContent = 'That file is not a Data.rsdk.';
+    message.className = 'warn';
+    return;
+  }
+  if (lastStatus && file.size + lastStatus.safetyMarginBytes > lastStatus.freeBytes) {
+    message.textContent = 'Not enough space on the TV: needs ' + humanBytes(file.size + lastStatus.safetyMarginBytes)
+      + ', ' + humanBytes(lastStatus.freeBytes) + ' free.';
+    message.className = 'warn';
+    return;
+  }
+
+  progress.classList.remove('hidden');
+  progress.value = 0;
+  message.textContent = 'Uploading ' + humanBytes(file.size) + '... keep this page open.';
+  message.className = '';
+
+  // XMLHttpRequest, because fetch() cannot report upload progress.
+  const result = await new Promise((resolve) => {
+    const request = new XMLHttpRequest();
+    request.open('PUT', '/api/data');
+    request.setRequestHeader('X-Pin', pin());
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) progress.value = Math.floor((event.loaded / event.total) * 100);
+    };
+    request.onload = () => resolve({ ok: request.status === 200, text: request.responseText });
+    request.onerror = () => resolve({ ok: false, text: 'Connection to the TV was lost.' });
+    request.send(file);
+  });
+
+  progress.classList.add('hidden');
+  if (result.ok) {
+    message.textContent = result.text === 'installed'
+      ? 'Done! The game is starting on the TV.'
+      : 'Done! Restart the game on the TV (BACK > Restart game) to use it.';
+    message.className = 'ok';
+  } else {
+    message.textContent = result.text;
+    message.className = 'warn';
+  }
+  await refreshStatus();
+}
+
+/** @param {FileList} files */
+async function uploadSaves(files) {
+  const message = byId('save-message');
+  const results = [];
+  for (const file of Array.from(files)) {
+    if (file.size === 0 || file.size > MAX_SAVE_BYTES) {
+      results.push(file.name + ': not a save file');
+      continue;
+    }
+    const response = await api('/api/files/' + encodeURIComponent(file.name), { method: 'PUT', body: file });
+    results.push(file.name + ': ' + (response.ok ? 'uploaded' : await response.text()));
+  }
+  message.textContent = results.join(' / ');
+  await Promise.all([refreshStatus(), refreshFiles()]);
+}
+
+byId('pin-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = /** @type {HTMLInputElement} */ (byId('pin-input'));
+  sessionStorage.setItem(PIN_KEY, input.value.trim());
+  try {
+    await Promise.all([refreshStatus(), refreshFiles()]);
+  } catch (error) {
+    // showPinForm() already explained a wrong PIN.
+  }
+});
+
+byId('data-file').addEventListener('change', (event) => {
+  const input = /** @type {HTMLInputElement} */ (event.target);
+  if (input.files && input.files[0]) uploadDataPack(input.files[0]).catch(() => undefined);
+  input.value = '';
+});
+
+byId('save-files').addEventListener('change', (event) => {
+  const input = /** @type {HTMLInputElement} */ (event.target);
+  if (input.files && input.files.length > 0) uploadSaves(input.files).catch(() => undefined);
+  input.value = '';
+});
+
+byId('plus-toggle').addEventListener('change', async (event) => {
+  const checked = /** @type {HTMLInputElement} */ (event.target).checked;
+  await api('/api/settings?plusEnabled=' + (checked ? '1' : '0'), { method: 'PUT' });
+  await refreshStatus();
+});
+
+if (pin()) {
+  Promise.all([refreshStatus(), refreshFiles()]).catch(() => undefined);
+}
+setInterval(() => {
+  if (pin() && !byId('app').classList.contains('hidden')) refreshStatus().catch(() => undefined);
+}, REFRESH_MS);
+</script>
+</body>
+</html>
