@@ -5,6 +5,7 @@
 #include "PortRuntime.h"
 
 #include "NetInfo.h"
+#include "PortInfo.h"
 #include "TransferServer.h"
 
 #include <algorithm>
@@ -30,6 +31,7 @@ constexpr Color kText      = { 235, 235, 245, 255 };
 constexpr Color kDim       = { 150, 160, 190, 255 };
 constexpr Color kHighlight = { 255, 210, 60, 255 };
 constexpr Color kSelection = { 40, 70, 160, 255 };
+constexpr Color kLink      = { 90, 170, 255, 255 };
 
 constexpr std::array<const char *, 3> kMenuLabels = { "Resume", "Restart game", "Close app" };
 
@@ -229,18 +231,20 @@ void PortRuntime::DrawMenu(int width, int height, int scale) const
     const std::string hint       = TransferHint();
     const bool restartPending    = server_ && server_->Snapshot().restartPending;
     const char *const kPendingMsg = "Uploaded files apply on restart";
+    // The TV cannot open links, so the project page is shown as text to type or search.
+    const std::string about = std::string("v") + kAppVersion + "  " + kProjectUrlShort;
 
     // Size the panel to its widest line, so it stays compact over the game.
     const int glyph   = BitmapFont::kGlyphSize * scale;
     const int lineGap = glyph + 6 * scale;
-    int contentW      = TextRenderer::MeasureText(hint, scale);
+    int contentW      = std::max(TextRenderer::MeasureText(hint, scale), TextRenderer::MeasureText(about, scale));
     if (restartPending)
         contentW = std::max(contentW, TextRenderer::MeasureText(kPendingMsg, scale));
     for (const char *label : kMenuLabels)
         contentW = std::max(contentW, TextRenderer::MeasureText(label, scale));
 
     const int menuLines = static_cast<int>(MenuItem::Count);
-    const int infoLines = restartPending ? 2 : 1;
+    const int infoLines = restartPending ? 3 : 2; // [pending], transfer hint, about
     const int panelW    = std::min(width - 8 * scale, contentW + 24 * scale);
     const int panelH    = lineGap * (menuLines + infoLines) + lineGap * 3; // title, gaps and padding
     const int panelX    = (width - panelW) / 2;
@@ -267,6 +271,8 @@ void PortRuntime::DrawMenu(int width, int height, int scale) const
         y += lineGap;
     }
     text_.DrawTextCentered(width / 2, y, hint, scale, kDim);
+    y += lineGap;
+    text_.DrawTextCentered(width / 2, y, about, scale, kLink);
 }
 
 void PortRuntime::DrawToast(int width, int height, int scale)

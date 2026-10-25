@@ -32,17 +32,20 @@ struct KeyMapping {
 };
 
 // clang-format off
-/** Remote held sideways: number pad becomes a D-pad, colour keys become face buttons. */
+/**
+ * Remote held sideways: number pad becomes a D-pad, and the colour keys become
+ * the face buttons of the same colour on an Xbox controller.
+ */
 constexpr std::array<KeyMapping, 16> kMappings = { {
     { SDL_SCANCODE_2,  SDL_SCANCODE_LEFT  }, { SDL_SCANCODE_KP_2, SDL_SCANCODE_LEFT  },
     { SDL_SCANCODE_8,  SDL_SCANCODE_RIGHT }, { SDL_SCANCODE_KP_8, SDL_SCANCODE_RIGHT },
     { SDL_SCANCODE_6,  SDL_SCANCODE_UP    }, { SDL_SCANCODE_KP_6, SDL_SCANCODE_UP    },
     { SDL_SCANCODE_4,  SDL_SCANCODE_DOWN  }, { SDL_SCANCODE_KP_4, SDL_SCANCODE_DOWN  },
     { SDL_SCANCODE_0,  SDL_SCANCODE_RETURN}, { SDL_SCANCODE_KP_0, SDL_SCANCODE_RETURN},
-    { kWebOSRed,       SDL_SCANCODE_A     }, // A: jump
-    { kWebOSGreen,     SDL_SCANCODE_S     }, // B: jump
-    { kWebOSYellow,    SDL_SCANCODE_Q     }, // X
-    { kWebOSBlue,      SDL_SCANCODE_W     }, // Y
+    { kWebOSGreen,     SDL_SCANCODE_A     }, // A (green on Xbox)
+    { kWebOSRed,       SDL_SCANCODE_S     }, // B (red on Xbox)
+    { kWebOSBlue,      SDL_SCANCODE_Q     }, // X (blue on Xbox)
+    { kWebOSYellow,    SDL_SCANCODE_W     }, // Y (yellow on Xbox)
     { SDL_SCANCODE_KP_ENTER, SDL_SCANCODE_RETURN },
     { SDL_SCANCODE_SELECT,   SDL_SCANCODE_RETURN }, // some remotes report OK as Select
 } };
@@ -103,13 +106,13 @@ MenuAction ToMenuAction(const SDL_Event &event)
             case SDL_SCANCODE_SELECT:
             case SDL_SCANCODE_0:
             case SDL_SCANCODE_KP_0:
-            case kWebOSRed: return MenuAction::Confirm;
+            case kWebOSGreen: return MenuAction::Confirm; // A confirms, as on a controller
 
             case SDL_SCANCODE_ESCAPE:
             case SDL_SCANCODE_AC_BACK:
             case kWebOSBack:
             case kWebOSExit:
-            case kWebOSGreen: return event.key.repeat ? MenuAction::None : MenuAction::Cancel;
+            case kWebOSRed: return event.key.repeat ? MenuAction::None : MenuAction::Cancel; // B backs out
 
             default: return MenuAction::None;
         }

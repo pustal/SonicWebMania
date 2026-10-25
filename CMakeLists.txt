@@ -8,7 +8,7 @@
 # See README.md for the full walkthrough.
 
 cmake_minimum_required(VERSION 3.21)
-project(SonicWebMania VERSION 0.1.0 LANGUAGES C CXX)
+project(SonicWebMania VERSION 1.0.0 LANGUAGES C CXX)
 
 set(SWM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${SWM_ROOT}/cmake")
@@ -133,7 +133,9 @@ set_target_properties(swm_port PROPERTIES CXX_EXTENSIONS OFF)
 target_include_directories(swm_port
     PUBLIC "${SWM_ROOT}/src/port"
     PRIVATE "${SWM_GENERATED_DIR}" "${SWM_ROOT}/external/cpp-httplib")
-target_compile_definitions(swm_port PRIVATE $<$<BOOL:${SWM_TARGET_WEBOS}>:SWM_TARGET_WEBOS=1>)
+target_compile_definitions(swm_port
+    PUBLIC SWM_VERSION="${PROJECT_VERSION}"
+    PRIVATE $<$<BOOL:${SWM_TARGET_WEBOS}>:SWM_TARGET_WEBOS=1>)
 target_compile_options(swm_port PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion>)
 find_package(Threads REQUIRED)

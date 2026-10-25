@@ -32,6 +32,7 @@
   td:last-child { text-align:right; }
   a { color:var(--accent); }
   .hidden { display:none; }
+  footer { text-align:center; padding:8px 0 24px; }
 </style>
 </head>
 <body>
@@ -79,6 +80,11 @@
       <p class="dim">Off by default, as the decompilation's licence requires. Takes effect after a restart.</p>
     </section>
   </div>
+
+  <footer class="dim">
+    SonicWebMania<span id="app-version"></span> &middot;
+    <a href="https://github.com/pustal/SonicWebMania" target="_blank" rel="noopener">github.com/pustal/SonicWebMania</a>
+  </footer>
 </main>
 
 <script>
@@ -87,7 +93,7 @@
 /**
  * @typedef {{ present: boolean, size: number }} DataPackState
  * @typedef {{ active: boolean, received: number, expected: number }} UploadState
- * @typedef {{ mode: 'setup'|'game', freeBytes: number, safetyMarginBytes: number, persistent: boolean,
+ * @typedef {{ version: string, mode: 'setup'|'game', freeBytes: number, safetyMarginBytes: number, persistent: boolean,
  *             dataPack: DataPackState, plusEnabled: boolean, restartPending: boolean, upload: UploadState }} Status
  * @typedef {{ name: string, size: number, mtime: number }} UserFile
  */
@@ -152,6 +158,7 @@ async function refreshStatus() {
   /** @type {Status} */
   const status = await response.json();
   lastStatus = status;
+  byId('app-version').textContent = ' ' + status.version;
 
   byId('pin-section').classList.add('hidden');
   byId('app').classList.remove('hidden');

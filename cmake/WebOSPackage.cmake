@@ -3,8 +3,9 @@
 # Adds the "webos-package" target: stages the IPK layout under
 #   <build>/ipk/  appinfo.json, icons, bin/SonicWebMania, lib/libSDL2-2.0.so.0
 # strips the binary and builds dist/<id>_<version>_arm.ipk with ares-package
-# (from @webos-tools/cli). Also adds "webos-install" (ares-install to the
-# device in $ARES_DEVICE, or the default device).
+# (from @webos-tools/cli), plus dist/<id>.manifest.json for the webOS Homebrew
+# Channel. Also adds "webos-install" (ares-install to SWM_ARES_DEVICE, or the
+# default device).
 
 find_program(SWM_ARES_PACKAGE ares-package)
 find_program(SWM_ARES_INSTALL ares-install)
@@ -12,6 +13,9 @@ find_program(SWM_ARES_INSTALL ares-install)
 set(SWM_IPK_STAGE "${CMAKE_CURRENT_BINARY_DIR}/ipk")
 set(SWM_DIST_DIR "${SWM_ROOT}/dist")
 set(SWM_IPK_NAME "${SWM_APP_ID}_${PROJECT_VERSION}_arm.ipk")
+set(SWM_MANIFEST_NAME "${SWM_APP_ID}.manifest.json")
+set(SWM_PROJECT_URL "https://github.com/pustal/SonicWebMania")
+set(SWM_ICON_URI "https://raw.githubusercontent.com/pustal/SonicWebMania/main/webos/largeIcon.png")
 
 configure_file("${SWM_ROOT}/webos/appinfo.json.in" "${CMAKE_CURRENT_BINARY_DIR}/appinfo.json" @ONLY)
 
@@ -40,6 +44,16 @@ if(SWM_ARES_PACKAGE)
         COMMAND "${SWM_ARES_PACKAGE}" --no-minify "${SWM_IPK_STAGE}" -o "${SWM_DIST_DIR}"
         COMMAND "${CMAKE_COMMAND}" -DSTAGE=${SWM_IPK_STAGE} -DIPK=${SWM_DIST_DIR}/${SWM_IPK_NAME}
                 -P "${SWM_ROOT}/cmake/ReportFootprint.cmake"
+        COMMAND "${CMAKE_COMMAND}"
+                -DIPK=${SWM_DIST_DIR}/${SWM_IPK_NAME}
+                -DOUTPUT=${SWM_DIST_DIR}/${SWM_MANIFEST_NAME}
+                -DAPP_ID=${SWM_APP_ID}
+                -DVERSION=${PROJECT_VERSION}
+                -DTITLE=SonicWebMania
+                "-DDESCRIPTION=Sonic Mania decompilation for webOS. Bring your own game data."
+                -DICON_URI=${SWM_ICON_URI}
+                -DSOURCE_URL=${SWM_PROJECT_URL}
+                -P "${SWM_ROOT}/cmake/WriteManifest.cmake"
         DEPENDS webos-stage
         COMMENT "Building ${SWM_IPK_NAME}"
         VERBATIM

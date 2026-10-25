@@ -6,6 +6,7 @@
 
 #include "BitmapFont.h"
 #include "NetInfo.h"
+#include "PortInfo.h"
 #include "RemoteInput.h"
 #include "Storage.h"
 #include "TransferServer.h"
@@ -126,9 +127,10 @@ void DrawScreen(SDL_Renderer *renderer, const TextRenderer &text, const ScreenSt
     }
 
     if (!storage.IsPersistent())
-        text.DrawTextCentered(center, kCanvasHeight - 34, "Warning: using temporary storage (lost on reboot)", 1, kWarning);
+        text.DrawTextCentered(center, kCanvasHeight - 46, "Warning: using temporary storage (lost on reboot)", 1, kWarning);
 
-    text.DrawTextCentered(center, kCanvasHeight - 18, "Press BACK to exit", 1, kDim);
+    text.DrawTextCentered(center, kCanvasHeight - 30, "Press BACK to exit", 1, kDim);
+    text.DrawTextCentered(center, kCanvasHeight - 16, std::string("v") + kAppVersion + "  " + kProjectUrlShort, 1, kAccent);
     SDL_RenderPresent(renderer);
 }
 

@@ -14,6 +14,7 @@
 #include "TransferServer.h"
 
 #include "NetInfo.h"
+#include "PortInfo.h"
 #include "PortConfig.h"
 #include "Storage.h"
 #include "WebPage.generated.h"
@@ -247,7 +248,8 @@ void TransferServer::RegisterRoutes()
         const bool packValid        = Storage::IsValidDataPackHeader(packPath);
 
         std::ostringstream json;
-        json << "{\"mode\":\"" << (setupMode_.load() ? "setup" : "game") << "\""
+        json << "{\"version\":\"" << kAppVersion << "\""
+             << ",\"mode\":\"" << (setupMode_.load() ? "setup" : "game") << "\""
              << ",\"freeBytes\":" << storage_.FreeBytes() << ",\"safetyMarginBytes\":" << Storage::kSafetyMarginBytes
              << ",\"persistent\":" << (storage_.IsPersistent() ? "true" : "false")
              << ",\"dataPack\":{\"present\":" << (packValid ? "true" : "false")

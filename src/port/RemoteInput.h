@@ -9,9 +9,11 @@
  * rewritten into one of those keys before the engine sees the event. Game
  * controllers are untouched: the engine's SDL2 input device handles them.
  *
- * Layout (the remote held sideways, like a classic pad):
+ * Layout (the remote held sideways, like a classic pad). The colour buttons
+ * follow the Xbox controller's colours:
  *   2 = Left, 8 = Right, 6 = Up, 4 = Down,
- *   Red = A (jump), Green = B, Yellow = X, Blue = Y, 0 = Start/Pause.
+ *   Green = A, Red = B, Blue = X, Yellow = Y, 0 = Start/Pause.
+ * (In Sonic Mania both A and B jump, as they do on a controller.)
  * The remote's own arrow keys and OK button keep working as arrows and Start.
  */
 #ifndef SWM_REMOTE_INPUT_H
