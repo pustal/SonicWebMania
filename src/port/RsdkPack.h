@@ -14,8 +14,10 @@
  * and a fixed-key cipher (see RSDKv3-Decompilation's Reader.cpp, and
  * tools/rsdk_v3_convert.py for the same converter in Python).
  * ConvertOldV3Pack() rewrites such a pack as a hashed, unencrypted "RSDKv3"
- * pack. That release's scripts are PC bytecode the engine cannot run, but its
- * music and sound effects complete the Origins game.
+ * pack. The mobile release's pack (Data.rsdk.xmf) then plays on its own; the
+ * Steam release's scripts are stored under the PC build's names, which the
+ * engine does not load, but its music and sound effects complete the Origins
+ * game.
  */
 #ifndef SWM_RSDK_PACK_H
 #define SWM_RSDK_PACK_H

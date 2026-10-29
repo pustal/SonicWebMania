@@ -1,0 +1,168 @@
+diff --git a/RSDKv5/RSDK/Audio/Legacy/AudioLegacy.cpp b/RSDKv5/RSDK/Audio/Legacy/AudioLegacy.cpp
+index c6f8625..09d436f 100644
+--- a/RSDKv5/RSDK/Audio/Legacy/AudioLegacy.cpp
++++ b/RSDKv5/RSDK/Audio/Legacy/AudioLegacy.cpp
+@@ -1,4 +1,6 @@
+ 
++// webOS port: stand-ins from Sonic Mania for missing audio (see src/port/WebOSPortHooks.h)
++#include "WebOSPortHooks.h"
+ 
+ int32 RSDK::Legacy::globalSFXCount = 0;
+ int32 RSDK::Legacy::stageSFXCount  = 0;
+@@ -44,8 +46,20 @@ int32 RSDK::Legacy::PlayMusic(int32 trackID)
+         if (!loopPoint && track->trackLoop)
+             loopPoint = 1;
+ 
++        // (webOS port) A track the game's packs lack may come from Sonic Mania.
++        const char *fileName = track->fileName;
++        char replacement[0x40];
++        if (WebOSPort_ResolveLegacyMusic(track->fileName, replacement, sizeof(replacement), &loopPoint)) {
++            if (!replacement[0]) {
++                StopChannel(musicChannel);
++                musicCurrentTrack = trackID;
++                return musicChannel;
++            }
++            fileName = replacement;
++        }
++
+         musicCurrentTrack = trackID;
+-        musicChannel      = PlayStream(track->fileName, musicChannel, startPos, loopPoint, true);
++        musicChannel      = PlayStream(fileName, musicChannel, startPos, loopPoint, true);
+         musicVolume       = 100;
+     }
+ 
+@@ -79,8 +93,14 @@ void RSDK::Legacy::v4::SwapMusicTrack(const char *filePath, uint8 trackID, uint3
+ 
+ void RSDK::Legacy::LoadSfx(char *filename, uint8 slot, uint8 scope)
+ {
+-    if (sfxList[slot].scope == SCOPE_NONE)
+-        LoadSfxToSlot(filename, slot, 1, scope);
++    if (sfxList[slot].scope == SCOPE_NONE) {
++        // (webOS port) A sound effect the game's packs lack may come from Sonic Mania.
++        char replacement[0x40];
++        if (WebOSPort_ResolveLegacySfx(filename, replacement, sizeof(replacement)))
++            LoadSfxToSlot(replacement, slot, 1, scope);
++        else
++            LoadSfxToSlot(filename, slot, 1, scope);
++    }
+ }
+ 
+ void RSDK::Legacy::v3::SetSfxAttributes(int32 channelID, int32 loop, int8 pan)
+diff --git a/RSDKv5/RSDK/Core/Reader.cpp b/RSDKv5/RSDK/Core/Reader.cpp
+index 0ee40b4..bc27667 100644
+--- a/RSDKv5/RSDK/Core/Reader.cpp
++++ b/RSDKv5/RSDK/Core/Reader.cpp
+@@ -167,6 +167,7 @@ bool32 RSDK::LoadDataPack(const char *filePath, size_t fileOffset, bool32 useBuf
+             entry->useFileBuffer = useBuffer;
+             entry->packID        = dataPackCount;
+             entry->sizeKeys      = packVersion == 'B';
++            entry->audioOnly     = false; // (webOS port) Set afterwards by LoadAudioDataPack.
+         }
+ 
+         dataPacks[dataPackCount].fileBuffer = NULL;
+@@ -199,6 +200,37 @@ inline bool ends_with(std::string const &value, std::string const &ending)
+ }
+ #endif
+ 
++// (webOS port) True for paths the audio pack may serve (@p lowerPath is lower case).
++static bool32 IsAudioPath(const char *lowerPath)
++{
++    return strncmp(lowerPath, "data/soundfx/", 13) == 0 || strncmp(lowerPath, "data/music/", 11) == 0;
++}
++
++bool32 RSDK::LoadAudioDataPack(const char *filePath)
++{
++    const int32 firstEntry = dataFileListCount;
++    // Never buffered: Sonic Mania's pack is far larger than a retro game's.
++    if (!LoadDataPack(filePath, 0, false))
++        return false;
++    for (int32 f = firstEntry; f < dataFileListCount; ++f) dataFileList[f].audioOnly = true;
++    return true;
++}
++
++int32 RSDK::FindDataFileSource(const char *filename)
++{
++    char hashBuffer[0x400];
++    StringLowerCase(hashBuffer, filename);
++    RETRO_HASH_MD5(hash);
++    GEN_HASH_MD5_BUFFER(hashBuffer, hash);
++
++    // Entries are in pack order, so the first match is the one OpenDataFile uses.
++    for (int32 f = 0; f < dataFileListCount; ++f) {
++        if (HASH_MATCH_MD5(hash, dataFileList[f].hash))
++            return dataFileList[f].audioOnly ? DATAFILE_SOURCE_AUDIO : DATAFILE_SOURCE_GAME;
++    }
++    return DATAFILE_SOURCE_NONE;
++}
++
+ bool32 RSDK::OpenDataFile(FileInfo *info, const char *filename)
+ {
+     char hashBuffer[0x400];
+@@ -211,6 +243,9 @@ bool32 RSDK::OpenDataFile(FileInfo *info, const char *filename)
+ 
+         if (!HASH_MATCH_MD5(hash, file->hash))
+             continue;
++        // (webOS port) The audio pack only serves music and sound effects.
++        if (file->audioOnly && !IsAudioPath(hashBuffer))
++            continue;
+ 
+         info->usingFileBuffer = file->useFileBuffer;
+         if (!file->useFileBuffer) {
+diff --git a/RSDKv5/RSDK/Core/Reader.hpp b/RSDKv5/RSDK/Core/Reader.hpp
+index 7ea24b3..4bf0b81 100644
+--- a/RSDKv5/RSDK/Core/Reader.hpp
++++ b/RSDKv5/RSDK/Core/Reader.hpp
+@@ -72,6 +72,9 @@ struct RSDKFileInfo {
+     // (webOS port) Set for files of an RSDKvB pack (the 2013 Sonic 1 and 2
+     // releases), whose keys come from the file size instead of its name.
+     uint8 sizeKeys;
++    // (webOS port) Set for files of the audio pack (see LoadAudioDataPack):
++    // only found under Data/SoundFX/ and Data/Music/.
++    uint8 audioOnly;
+ };
+ 
+ struct RSDKContainer {
+@@ -96,6 +99,18 @@ void DetectEngineVersion();
+ bool32 LoadDataPack(const char *filename, size_t fileOffset, bool32 useBuffer);
+ bool32 OpenDataFile(FileInfo *info, const char *filename);
+ 
++// (webOS port) Sonic Mania's pack lending its music and sound effects to a
++// retro game: loaded after the game's packs, and only looked at for paths
++// under Data/SoundFX/ and Data/Music/ so its other files can never stand in
++// for the retro game's own (Settings.ini Game:audioDataFile).
++bool32 LoadAudioDataPack(const char *filePath);
++
++// (webOS port) Where a pack file would come from: DATAFILE_SOURCE_NONE,
++// DATAFILE_SOURCE_GAME (one of the game's packs) or DATAFILE_SOURCE_AUDIO
++// (the audio pack). Used to choose stand-ins for missing music and sounds.
++enum DataFileSources { DATAFILE_SOURCE_NONE, DATAFILE_SOURCE_GAME, DATAFILE_SOURCE_AUDIO };
++int32 FindDataFileSource(const char *filename);
++
+ enum FileModes { FMODE_NONE, FMODE_RB, FMODE_WB, FMODE_RB_PLUS };
+ 
+ static const char *openModes[3] = { "rb", "wb", "rb+" };
+diff --git a/RSDKv5/RSDK/User/Core/UserCore.cpp b/RSDKv5/RSDK/User/Core/UserCore.cpp
+index 3a802b8..74e3c52 100644
+--- a/RSDKv5/RSDK/User/Core/UserCore.cpp
++++ b/RSDKv5/RSDK/User/Core/UserCore.cpp
+@@ -323,6 +323,11 @@ void RSDK::LoadSettingsINI()
+             const char *extraPack = iniparser_getstring(ini, "Game:extraDataFile", "");
+             if (extraPack && *extraPack && !LoadDataPack(extraPack, 0, useBuffer))
+                 PrintLog(PRINT_NORMAL, "Could not load the extra data pack %s", extraPack);
++            // (webOS port) Sonic Mania's pack, for the music and sound effects
++            // a retro game's packs lack (see LoadAudioDataPack).
++            const char *audioPack = iniparser_getstring(ini, "Game:audioDataFile", "");
++            if (audioPack && *audioPack && !LoadAudioDataPack(audioPack))
++                PrintLog(PRINT_NORMAL, "Could not load the audio data pack %s", audioPack);
+         }
+ 
+ #if !RETRO_USE_ORIGINAL_CODE
+@@ -607,6 +612,8 @@ void RSDK::SaveSettingsINI(bool32 writeToFile)
+             // (webOS port) Keep the optional second pack (see LoadSettingsINI).
+             if (strcmp(iniparser_getstring(ini, "Game:extraDataFile", ""), "") != 0)
+                 WriteText(file, "extraDataFile=%s\n", iniparser_getstring(ini, "Game:extraDataFile", ""));
++            if (strcmp(iniparser_getstring(ini, "Game:audioDataFile", ""), "") != 0)
++                WriteText(file, "audioDataFile=%s\n", iniparser_getstring(ini, "Game:audioDataFile", ""));
+ 
+             if (strcmp(iniparser_getstring(ini, "Game:devMenu", ";unknown;"), ";unknown;") != 0 || (!RETRO_USE_ORIGINAL_CODE && RETRO_REV0U))
+                 WriteText(file, "devMenu=%s\n", (engine.devMenu ? "y" : "n"));

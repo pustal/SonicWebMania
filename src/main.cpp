@@ -10,13 +10,15 @@
  *      page and "Restart game" relaunch the app);
  *   2. otherwise the last game left normally (port.ini lastGame);
  *   3. otherwise Sonic Mania, or the first playable retro game when there is
- *      no Sonic Mania data.
+ *      no Sonic Mania data (Sonic Mania is optional: the app can be used for
+ *      the retro games alone, which are then offered without the opt-in).
  * A game id that cannot be played (its pack was removed, retro mode was
  * switched off) falls through to the next rule.
  *
  * Replaces RSDKv5/main.cpp from the engine (excluded in cmake/RSDKPlatform-webOS.cmake).
  */
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RetroAudio.h"
 #include "RetroSaves.h"
 
 // Sonic Mania is linked statically (GAME_STATIC), so its logic entry point
@@ -26,6 +28,7 @@
 #include <GameMain.h>
 #undef EngineInfo
 
+#include "port/IniEdit.h"
 #include "port/NetInfo.h"
 #include "port/PortConfig.h"
 #include "port/PortRuntime.h"
@@ -100,10 +103,14 @@ std::vector<swm::AchievementEntry> ReadAchievements()
     return entries;
 }
 
-/** The retro games the player can start now: none unless retro mode is on. */
-std::vector<swm::RetroGame> PlayableRetroGames(const swm::PortConfig &config, const swm::RetroLibrary &retro)
+/**
+ * The retro games the player can start now. Next to Sonic Mania they are an
+ * opt-in (port.ini retroEnabled); without Sonic Mania's data they are what
+ * the app is for, so they are always offered.
+ */
+std::vector<swm::RetroGame> PlayableRetroGames(const swm::PortConfig &config, const swm::RetroLibrary &retro, bool maniaReady)
 {
-    return config.IsRetroEnabled() ? retro.ScanPlayable() : std::vector<swm::RetroGame>{};
+    return config.IsRetroEnabled() || !maniaReady ? retro.ScanPlayable() : std::vector<swm::RetroGame>{};
 }
 
 /** True when @p id is Sonic Mania with its data installed, or one of @p retroGames. */
@@ -195,21 +202,27 @@ int32 main(int32 argc, char *argv[])
         std::fprintf(stderr, "SonicWebMania: file transfer server could not bind a port\n");
     std::fflush(stdout);
 
-    bool maniaReady                        = storage.HasValidDataPack();
-    std::vector<swm::RetroGame> retroGames = PlayableRetroGames(config, retro);
+    // Sonic Mania's pack, on the TV or a USB drive ("" when not installed).
+    std::string maniaPack                  = storage.DataPackPath();
+    bool maniaReady                        = !maniaPack.empty();
+    std::vector<swm::RetroGame> retroGames = PlayableRetroGames(config, retro, maniaReady);
     if (!maniaReady && retroGames.empty()) {
         server.SetSetupMode(true);
-        const std::function<bool()> retroReady = [&config, &retro] { return !PlayableRetroGames(config, retro).empty(); };
+        // Sonic Mania is not installed while the setup screen shows, so any playable retro game will do.
+        const std::function<bool()> retroReady = [&config, &retro] { return !PlayableRetroGames(config, retro, false).empty(); };
         const swm::SetupResult result = swm::RunSetupScreen(storage, serverRunning ? &server : nullptr, retroReady);
         if (result != swm::SetupResult::DataReady) {
             server.Stop();
             return result == swm::SetupResult::Failed ? 1 : 0;
         }
-        maniaReady = storage.HasValidDataPack();
-        retroGames = PlayableRetroGames(config, retro);
+        maniaPack  = storage.DataPackPath();
+        maniaReady = !maniaPack.empty();
+        retroGames = PlayableRetroGames(config, retro, maniaReady);
     }
 
     std::string game = ChooseGame(requestedGame, config.LastGame(), maniaReady, retroGames);
+    // The packs the engine will read from, which the web page must not move or replace meanwhile.
+    std::vector<std::string> packsInUse;
     if (game != swm::RetroLibrary::kManiaId) {
         // A retro game runs in its own folder, whose Settings.ini points at its packs.
         const swm::RetroGame *chosen = nullptr;
@@ -217,9 +230,20 @@ int32 main(int32 argc, char *argv[])
             if (game == candidate.info.id)
                 chosen = &candidate;
         }
-        std::string error = "no game to play";
-        if (chosen && retro.PrepareLaunch(*chosen, kDefaultSettings, &error) && chdir(retro.WorkFolder(game).c_str()) == 0) {
-            std::printf("SonicWebMania: starting %s (%s)\n", chosen->info.title, chosen->ModeDescription().c_str());
+        // Sonic Mania's pack lends the music and sounds the game's packs lack (see RetroAudio.h).
+        const std::string audioPack = config.IsManiaAudioEnabled() ? maniaPack : std::string();
+        std::string error           = "no game to play";
+        if (chosen && retro.PrepareLaunch(*chosen, kDefaultSettings, audioPack, &error)
+            && chdir(retro.WorkFolder(game).c_str()) == 0) {
+            std::printf("SonicWebMania: starting %s (%s%s)\n", chosen->info.title, chosen->ModeDescription().c_str(),
+                        audioPack.empty() ? "" : ", missing audio from Sonic Mania");
+            for (const swm::RetroPack *pack : { &chosen->origins, &chosen->classic }) {
+                if (pack->state == swm::PackState::Ready)
+                    packsInUse.push_back(pack->path);
+            }
+            if (!audioPack.empty())
+                packsInUse.push_back(audioPack);
+            swm::ConfigureRetroAudio(game, config.IsManiaSimilarMusicEnabled());
         }
         else {
             std::fprintf(stderr, "SonicWebMania: cannot start %s: %s\n", game.c_str(), error.c_str());
@@ -230,6 +254,14 @@ int32 main(int32 argc, char *argv[])
             game = swm::RetroLibrary::kManiaId;
         }
     }
+    if (game == swm::RetroLibrary::kManiaId) {
+        // The pack may have moved between the TV and a USB drive since the last start.
+        std::string error;
+        if (!swm::UpdateIniFile(storage.PathFor("Settings.ini"), kDefaultSettings, "Game", { { "dataFile", maniaPack } }, &error))
+            std::fprintf(stderr, "SonicWebMania: %s\n", error.c_str());
+        packsInUse.push_back(maniaPack);
+    }
+    server.SetPacksInUse(packsInUse);
     std::fflush(stdout);
 
     // Forget the game while it runs: if it crashes, the next launch does not start it again.

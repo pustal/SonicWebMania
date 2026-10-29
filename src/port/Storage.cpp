@@ -5,6 +5,7 @@
 #include "Storage.h"
 
 #include "PortConfig.h"
+#include "UsbDrives.h"
 
 #include <algorithm>
 #include <array>
@@ -99,7 +100,26 @@ std::string Storage::IncomingDir() const { return PathFor("incoming"); }
 
 std::string Storage::PendingDataPackPath() const { return PathFor(std::string(kDataPackName) + kPendingSuffix); }
 
-bool Storage::HasValidDataPack() const { return IsValidDataPackHeader(PathFor(kDataPackName)); }
+std::string Storage::UsbFolder(const std::string &mountPoint) { return mountPoint + "/" + kUsbFolderName; }
+
+std::string Storage::UsbDataPackPath(const std::string &mountPoint) { return UsbFolder(mountPoint) + "/" + kDataPackName; }
+
+std::string Storage::PendingPathFor(const std::string &packPath) { return packPath + kPendingSuffix; }
+
+std::string Storage::DataPackPath() const
+{
+    const std::string tv = PathFor(kDataPackName);
+    if (IsValidDataPackHeader(tv))
+        return tv;
+    for (const UsbDrive &drive : ListUsbDrives()) {
+        const std::string path = UsbDataPackPath(drive.mountPoint);
+        if (IsValidDataPackHeader(path))
+            return path;
+    }
+    return {};
+}
+
+bool Storage::HasValidDataPack() const { return !DataPackPath().empty(); }
 
 bool Storage::IsValidDataPackHeader(const std::string &path)
 {
@@ -132,15 +152,27 @@ int Storage::ApplyPendingFiles() const
     int applied = 0;
     std::error_code ec;
 
-    // A replacement Data.rsdk uploaded during the previous session.
-    const std::string pendingPack = PendingDataPackPath();
-    if (fs::exists(pendingPack, ec)) {
-        if (IsValidDataPackHeader(pendingPack)) {
-            fs::rename(pendingPack, PathFor(kDataPackName), ec);
-            applied += ec ? 0 : 1;
-        }
-        else {
+    // A replacement Data.rsdk uploaded during the previous session, on the TV
+    // or a USB drive. Installing it removes the copies elsewhere, so the one
+    // just uploaded is the one used.
+    std::vector<std::string> packPaths = { PathFor(kDataPackName) };
+    for (const UsbDrive &drive : ListUsbDrives())
+        packPaths.push_back(UsbDataPackPath(drive.mountPoint));
+    for (const std::string &packPath : packPaths) {
+        const std::string pendingPack = PendingPathFor(packPath);
+        if (!fs::exists(pendingPack, ec))
+            continue;
+        if (!IsValidDataPackHeader(pendingPack)) {
             fs::remove(pendingPack, ec);
+            continue;
+        }
+        fs::rename(pendingPack, packPath, ec);
+        if (ec)
+            continue;
+        ++applied;
+        for (const std::string &other : packPaths) {
+            if (other != packPath)
+                fs::remove(other, ec);
         }
     }
 

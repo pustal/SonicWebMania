@@ -43,6 +43,26 @@ public:
     bool SetRetroEnabled(bool enabled);
 
     /**
+     * Whether a retro game's missing music and sound effects come from Sonic
+     * Mania's pack, when it is installed: the same sounds, and the tracks
+     * Mania remixed (Green Hill, Chemical Plant...). On by default.
+     */
+    bool IsManiaAudioEnabled() const;
+
+    /** Stores the Mania audio setting. @return False if port.ini could not be written. */
+    bool SetManiaAudioEnabled(bool enabled);
+
+    /**
+     * Whether, on top of IsManiaAudioEnabled(), zones Mania has no version of
+     * get a Mania track of a similar feel (Emerald Hill plays Green Hill...).
+     * Off by default.
+     */
+    bool IsManiaSimilarMusicEnabled() const;
+
+    /** Stores the similar-music setting. @return False if port.ini could not be written. */
+    bool SetManiaSimilarMusicEnabled(bool enabled);
+
+    /**
      * The game to start when the app is opened: the id of the last game that
      * was left normally ("mania", "sonic1", ...), or "" for the default.
      *
@@ -63,6 +83,8 @@ private:
     mutable std::mutex mutex_;
     bool plusEnabled_  = false;
     bool retroEnabled_ = false;
+    bool maniaAudio_   = true;
+    bool maniaSimilar_ = false;
     std::string lastGame_;
 };
 

@@ -102,6 +102,27 @@ void WebOSPort_ShowLegacyAchievements(void);
 /** Sonic CD's menu asked for the leaderboards, which need an online service (patches/rsdk/0004). */
 void WebOSPort_ShowLegacyLeaderboards(void);
 
+/**
+ * A retro game is loading sound effect @p name (relative to Data/SoundFX/,
+ * patches/rsdk/0006). Implemented in src/RetroAudio.cpp: when the game's
+ * packs lack it, picks a Sonic Mania stand-in.
+ *
+ * @return Non-zero with the name to load in @p out (at most @p outSize bytes
+ *         with the terminator); zero to load @p name as it is.
+ */
+int WebOSPort_ResolveLegacySfx(const char *name, char *out, int outSize);
+
+/**
+ * A retro game is starting music track @p name (relative to Data/Music/,
+ * patches/rsdk/0006) that would loop at sample @p *loopPoint (0: no loop).
+ * Implemented in src/RetroAudio.cpp: when the game's packs lack the track,
+ * picks a Sonic Mania stand-in, or silence.
+ *
+ * @return Non-zero with the track to play in @p out (empty: play nothing) and
+ *         its loop point in @p *loopPoint; zero to play @p name as it is.
+ */
+int WebOSPort_ResolveLegacyMusic(const char *name, char *out, int outSize, int *loopPoint);
+
 #ifdef __cplusplus
 }
 #endif

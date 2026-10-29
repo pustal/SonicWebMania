@@ -1,7 +1,8 @@
 /**
  * @file PortConfig.cpp
  * @brief Reads and writes port.ini (see PortConfig.h). The format is plain
- *        "key=value" lines (plusEnabled, retroEnabled, lastGame); unknown
+ *        "key=value" lines (plusEnabled, retroEnabled, maniaAudio,
+ *        maniaSimilarMusic, lastGame); unknown
  *        keys are ignored.
  */
 #include "PortConfig.h"
@@ -16,6 +17,8 @@ namespace
 constexpr const char *kPlusKey     = "plusEnabled";
 constexpr const char *kRetroKey    = "retroEnabled";
 constexpr const char *kLastGameKey = "lastGame";
+constexpr const char *kManiaAudioKey   = "maniaAudio";
+constexpr const char *kManiaSimilarKey = "maniaSimilarMusic";
 
 /** Game ids are short names of letters and digits; anything else is ignored. */
 bool IsPlainId(const std::string &id)
@@ -59,6 +62,10 @@ PortConfig::PortConfig(std::string path) : path_(std::move(path))
             plusEnabled_ = ParseBool(value);
         else if (key == kRetroKey)
             retroEnabled_ = ParseBool(value);
+        else if (key == kManiaAudioKey)
+            maniaAudio_ = ParseBool(value);
+        else if (key == kManiaSimilarKey)
+            maniaSimilar_ = ParseBool(value);
         else if (key == kLastGameKey && IsPlainId(value))
             lastGame_ = value;
     }
@@ -90,6 +97,32 @@ bool PortConfig::SetRetroEnabled(bool enabled)
     return SaveLocked();
 }
 
+bool PortConfig::IsManiaAudioEnabled() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return maniaAudio_;
+}
+
+bool PortConfig::SetManiaAudioEnabled(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    maniaAudio_ = enabled;
+    return SaveLocked();
+}
+
+bool PortConfig::IsManiaSimilarMusicEnabled() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return maniaSimilar_;
+}
+
+bool PortConfig::SetManiaSimilarMusicEnabled(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    maniaSimilar_ = enabled;
+    return SaveLocked();
+}
+
 std::string PortConfig::LastGame() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -112,6 +145,8 @@ bool PortConfig::SaveLocked() const
     out << "# SonicWebMania port settings (changes apply after a restart)\n";
     out << kPlusKey << '=' << (plusEnabled_ ? "1" : "0") << '\n';
     out << kRetroKey << '=' << (retroEnabled_ ? "1" : "0") << '\n';
+    out << kManiaAudioKey << '=' << (maniaAudio_ ? "1" : "0") << '\n';
+    out << kManiaSimilarKey << '=' << (maniaSimilar_ ? "1" : "0") << '\n';
     if (!lastGame_.empty())
         out << kLastGameKey << '=' << lastGame_ << '\n';
     return static_cast<bool>(out);

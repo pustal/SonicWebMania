@@ -2,13 +2,14 @@
 
 # SonicWebMania
 
-**Version 2.0.1** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+**Version 2.1.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
 and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations,
 built as a **native** webOS app (SDL2), with a few TV-friendly extras:
 
 - **Bring your own data, from your phone.** On first launch the TV shows an address and
   a PIN. Open it on any phone or computer on the same network and upload the `Data.rsdk`
-  from your own copy of the game. No USB stick or SSH needed.
+  from your own copy of the game, to the TV or a USB drive. No SSH needed. Sonic Mania
+  is optional: the app can be used for the retro games alone.
 - **Save transfer.** The same page lists your saves (Sonic Mania's and each retro
   game's) for download, and lets you upload saves from another device.
 - **Plays with the remote.** Controllers work as usual; the remote is mapped too (below).
@@ -17,7 +18,7 @@ built as a **native** webOS app (SDL2), with a few TV-friendly extras:
   project's page.
 - **Retro games (optional).** The engine also plays Sonic the Hedgehog, Sonic 2 and Sonic CD
   from your own data packs: those of Sonic Origins and/or of the earlier releases, with
-  save slots. See
+  save slots, and Sonic Mania's music and sounds filling what the packs lack. See
   [Retro games](#retro-games).
 - **Achievements.** The game's 18 achievements unlock as you play (the decompilation's
   engine records them in `Achievements.bin`, next to your saves). The menu lists them all,
@@ -77,6 +78,13 @@ remote are held for at least a frame, so the game never misses a short press.
 - Only devices on private networks (192.168.x.x, 10.x.x.x, 172.16-31.x.x) are answered.
 - While the game is running, uploaded files are **staged** and applied the next time the
   game starts (Back > Restart game). The engine never sees a file change under it.
+- Packs (Sonic Mania's `Data.rsdk` and the retro packs) can be kept on the TV or a USB
+  drive, chosen in **Store packs on**, and moved between them later with each pack's
+  **Move** button. Sonic Mania's goes in a `SonicWebMania` folder at the top of the drive.
+  Only one copy is kept; if both exist, the TV's is used.
+- The packs the running game reads from can't be moved, replaced or removed until you
+  switch to another game (the engine reopens them for every file it reads). A new
+  `Data.rsdk` for Sonic Mania is staged instead and installed at the next start.
 - The Mania Plus content is **off by default** and can be enabled there (see Licence).
 
 ## Retro games
@@ -87,19 +95,39 @@ each game's packs there. The **Retro games** page of the Back menu then switches
 Sonic Mania and every game that can be played (the app restarts into it). The app
 starts with the last game you left normally.
 
+Sonic Mania is optional. Without its `Data.rsdk` the retro games are always offered (the
+toggle only matters next to Mania), and the first-run screen is done as soon as a retro
+game can be played.
+
 | Pack | Where it comes from |
 |---|---|
 | Sonic Origins | `Sonic1u.rsdk`, `Sonic2u.rsdk`, `SonicCDu.rsdk` from the game's install folder (`retro`) |
-| Earlier release | Sonic 1 and 2 (2013): `Data.rsdk` (Android: `Data.rsdk.xmf` in the APK). Sonic CD (2011, Steam): `Data.rsdk` |
+| Earlier release | Sonic 1 and 2 (2013): `Data.rsdk` (Android: `Data.rsdk.xmf` in the APK). Sonic CD (2011): `Data.rsdk.xmf` from the mobile app's APK, or `Data.rsdk` from Steam |
 
 How each game plays depends on what you upload:
 
 | Packs | Result |
 |---|---|
-| Origins + earlier release | The Origins game, with the earlier release's music and sound effects. The sounds Origins added (Drop Dash, Knuckles' and Amy's moves) stay silent |
-| Origins only | The Origins game without sound: Origins keeps its audio outside these packs |
-| Earlier release only | Sonic 1 and 2: that release. Sonic CD (2011): not playable alone, since its scripts are PC bytecode the engine doesn't run; it only adds sound to the Origins game |
+| Origins + earlier release | The Origins game, with the earlier release's music and sound effects. The sounds Origins added (Drop Dash, Knuckles' and Amy's moves) come from Sonic Mania when it is installed, otherwise they are silent |
+| Origins only | The Origins game. Origins keeps its audio outside these packs, so without Sonic Mania it is silent; with it, see **Sound from Sonic Mania** below |
+| Earlier release only | Sonic 1 and 2: that release. Sonic CD: the mobile pack is the 2011 game, with its own menus, save slots and Time Attack. The Steam pack can't be played alone (its scripts are stored the way the PC build named them, which the engine doesn't load); it only adds sound to the Origins game |
 
+- **Sound from Sonic Mania.** With Sonic Mania's `Data.rsdk` installed, whatever music or
+  sound effect a retro game's packs lack comes from Mania's pack (on by default; a
+  checkbox on the page turns it off). The game's own packs always win.
+  - Sound effects: Mania's file of the same name (jumps, rings, springs, the Drop Dash,
+    Knuckles' glide and climb...), or its nearest one; Amy's hammer uses Mania's hits
+    and jumps.
+  - Music: the zones and jingles Mania remixed, with Mania's loop points: Green Hill,
+    Chemical Plant, Oil Ocean, Stardust Speedway and Metallic Madness (by time period),
+    plus invincibility, speed shoes, act clear, boss, drowning, game over and Super.
+  - **Similar music** (off by default): zones Mania has no version of get a Mania track
+    of similar feel, such as Emerald Hill with Green Hill, Casino Night with Studiopolis,
+    Aquatic Ruin and Tidal Tempest with Hydrocity, Mystic Cave and Quartz Quadrant with
+    Lava Reef. The title, special stage and credits use Mania's own.
+
+  A Mania track that only shares a name with a retro one (its title screen, credits) is
+  not played unless similar music is on. The table is in `src/RetroAudio.cpp`.
 - **Save slots.** Starting Sonic 1 or 2 opens a save screen: play without saving, or
   pick one of four slots to continue (zone, character, lives and emeralds are shown),
   start a new game, or delete it (press OK twice). New games then choose the character:
@@ -108,7 +136,8 @@ How each game plays depends on what you upload:
   each act), as the 2013 releases did. The 2013 packs' title screen cannot start a game
   by itself (those releases used native menus), so for them the save screen opens when
   the title would start its demo. Sonic CD goes to its own 2011 menu instead: its save
-  slots, Time Attack and extras.
+  slots, Time Attack and extras. The mobile pack's menus work with the buttons, and also
+  take a touch (a mouse click on a computer; the Magic Remote's pointer is untested).
 - **Sonic Origins' modes.** With the Origins packs the save screen starts with a mode:
   - **Anniversary**: extra lives become coins, no time limit;
   - **Classic**: lives and the 10-minute time limit (and, in Sonic 1, no spin dash);
@@ -133,9 +162,10 @@ How each game plays depends on what you upload:
 - **Storage.** The page offers each USB drive and the TV; a USB drive is chosen first, to
   spare the TV's space. Packs go in a `SonicWebMania/retro` folder on the drive (the page can
   create it), named `<game>-origins.rsdk` and `<game>-classic.rsdk` (`sonic1`, `sonic2`,
-  `soniccd`). You can also copy them there yourself under those names.
-- **Sonic CD's 2011 pack** uses an older format. The TV converts it on upload, which needs
-  room for a second copy (about 75 MiB) for a moment. `tools/rsdk_v3_convert.py` does the
+  `soniccd`). You can also copy them there yourself under those names, and move them
+  between the TV and the drive later from the page.
+- **Sonic CD's 2011 packs** (mobile and Steam) use an older format. The TV converts them on
+  upload, which needs room for a second copy (about 75 MiB) for a moment. `tools/rsdk_v3_convert.py` does the
   same on a computer.
 - Each game keeps its own settings and saves (`SGame.bin`) in `games/<game>/` in the
   app's data folder.
@@ -151,6 +181,11 @@ How each game plays depends on what you upload:
   `0004-retro-mirror-mode.patch` mirrors the stage before the HUD is drawn and swaps left
   and right in Mirror mode; `0005-retro-achievements.patch` passes the games' achievement
   unlocks and Sonic CD's achievement menu to the port.
+  `0006-retro-v3-input.patch` fixes how the RSDKv3 engine reads buttons in scripts that
+  name no controller (the 2011 Sonic CD's): the engine looked up the controller by the
+  object's slot, so most menu objects never saw a press. `0007-retro-mania-audio.patch`
+  loads Sonic Mania's pack for audio only (`Game:audioDataFile`) and asks the port for
+  stand-ins for missing music and sound effects.
 
 ## Disk space
 
@@ -234,11 +269,13 @@ Escape opens the port menu on a keyboard.
 ```
 src/main.cpp                launcher: storage, transfer server, setup screen, picks the game, then the engine
 src/RetroSaves.cpp          retro games' save slots, Origins modes, coins and Mirror mode (engine side)
+src/RetroAudio.cpp          Sonic Mania stand-ins for the retro games' missing music and sounds
 src/port/
-  WebOSPortHooks.h          the C interface the engine calls (5 functions)
+  WebOSPortHooks.h          the C interface the engine calls
   PortRuntime.*             implements the hooks: Back menu (achievements, button test,
                             retro games), notifications, Plus opt-in
   RetroGames.*              Sonic 1, 2 and CD: finds their packs, plans Origins + classic, per-game folders
+  IniEdit.*                 rewrites the pack paths in Settings.ini before each start
   SaveSelect.h              what the retro games' save screen shows and returns
   RetroAchievements.*       the retro games' achievement lists
   RsdkPack.*                looks inside packs; converts Sonic CD's 2011 pack
@@ -248,14 +285,15 @@ src/port/
   RemoteInput.*             remote button mapping and menu navigation
   SetupScreen.*             first-run screen (address, PIN, free space, progress)
   TransferServer.*          HTTP server (cpp-httplib) for data and saves
-  Storage.*                 data folder, free space, staged uploads, log trimming
-  PortConfig.*              port.ini (Plus and retro opt-ins, last game)
+  Storage.*                 data folder, Sonic Mania's pack (TV or USB), free space, staged uploads, log trimming
+  PortConfig.*              port.ini (Plus and retro opt-ins, Mania audio settings, last game)
   PortInfo.h                app version (from CMake) and project address
   BitmapFont.* TextRenderer.cpp   built-in 8x8 font, so text works before any game data exists
 web/index.html              the transfer page, embedded into the binary at build time
 patches/rsdk/               engine patches, applied by scripts/apply-patches.sh: 0001 hook call sites in the
                             SDL2 device + the Plus gate; 0002 retro games; 0003 save screen hook;
-                            0004 Mirror mode; 0005 retro achievements (see Retro games)
+                            0004 Mirror mode; 0005 retro achievements; 0006 RSDKv3 script input;
+                            0007 Sonic Mania audio for retro games (see Retro games)
 tools/                      rsdk_table.py (compare pack contents), rsdk_v3_convert.py (Sonic CD 2011 pack)
 cmake/WriteManifest.cmake       Homebrew Channel manifest for each release
 scripts/make-icon.py        draws the app icon and README logo (original pixel art with the name)

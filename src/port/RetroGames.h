@@ -17,8 +17,10 @@
  *     Origins added (the Drop Dash, Knuckles' and Amy's moves) stay silent;
  *   - origins only: the Origins game without sound;
  *   - classic only: the classic game, when its scripts are the mobile
- *     bytecode the engine runs (the 2013 Sonic 1 and 2 packs). Sonic CD's
- *     2011 PC pack has PC bytecode, so it can only lend its sound.
+ *     bytecode the engine runs (the 2013 Sonic 1 and 2 packs, and Sonic CD's
+ *     mobile pack). Sonic CD's Steam pack stores its scripts under the PC
+ *     build's names (GS000.bin...), which the engine does not load, so it
+ *     can only lend its sound.
  *
  * Sonic CD's 2011 pack comes in an older format the engine cannot open; the
  * web page converts it on upload (see RsdkPack.h).
@@ -97,7 +99,7 @@ class RetroLibrary
 public:
     /** Folder (inside the data directory, or inside kUsbFolderName on a drive) holding the packs. */
     static constexpr const char *kPackFolderName = "retro";
-    /** Folder created at the top of a USB drive. */
+    /** Folder created at the top of a USB drive (shared with Sonic Mania's pack, see Storage). */
     static constexpr const char *kUsbFolderName = "SonicWebMania";
     /** Id used for Sonic Mania itself in menus, port.ini and --swm-game. */
     static constexpr const char *kManiaId = "mania";
@@ -127,14 +129,17 @@ public:
 
     /**
      * Creates the game's working folder and points its Settings.ini at the
-     * packs found: Game:dataFile, Game:extraDataFile and Game:gameType are
-     * rewritten at every launch (packs may have moved between the TV and a
-     * drive); every other setting the player changed is kept. A new
-     * Settings.ini starts from @p defaultSettings.
+     * packs found: Game:dataFile, Game:extraDataFile, Game:audioDataFile and
+     * Game:gameType are rewritten at every launch (packs may have moved
+     * between the TV and a drive); every other setting the player changed is
+     * kept. A new Settings.ini starts from @p defaultSettings.
      *
+     * @param audioPack Sonic Mania's pack, lending the music and sound effects
+     *                  the game's packs lack (see RetroAudio.h); "" for none.
      * @return False with a message in @p error if the folder or file could not be written.
      */
-    bool PrepareLaunch(const RetroGame &game, const std::string &defaultSettings, std::string *error) const;
+    bool PrepareLaunch(const RetroGame &game, const std::string &defaultSettings, const std::string &audioPack,
+                       std::string *error) const;
 
     /** Reads the start of @p path and classifies it (see PackState). */
     static PackState Inspect(const std::string &path, char *version);

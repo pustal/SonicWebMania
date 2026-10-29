@@ -5,16 +5,24 @@
  * HTTP API (all /api routes require the PIN, as an "X-Pin" header or a ?pin= query):
  *   GET  /                    the upload page (web/index.html, embedded at build time)
  *   GET  /api/status          JSON: mode, free space, data pack state, settings
- *   PUT  /api/data            raw body = Data.rsdk (streamed to disk)
+ *   PUT  /api/data?dest=tv|usb[&mount=<USB mount point>]
+ *                             raw body = Sonic Mania's Data.rsdk (streamed to disk; staged
+ *                             for the next start while Sonic Mania's pack is in use)
  *   GET  /api/files           JSON: saves/settings files, Sonic Mania's and each retro game's
  *   GET  /api/files/:name[?game=<id>]   download one file (a retro game's with ?game=sonic1 ...)
  *   PUT  /api/files/:name[?game=<id>]   raw body = replacement file (applied at next launch while playing)
- *   PUT  /api/settings?plusEnabled=0|1&retroEnabled=0|1   (either or both)
+ *   PUT  /api/settings?plusEnabled=0|1&retroEnabled=0|1&maniaAudio=0|1&maniaSimilarMusic=0|1
+ *                             (any of them)
  *   GET  /api/retro           JSON: retro mode, TV and USB space, each game's packs
  *   PUT  /api/retro/:game/:edition?dest=tv|usb[&mount=<USB mount point>]
  *                             raw body = a retro game's pack (edition: origins|classic)
  *   DELETE /api/retro/:game/:edition   removes that pack wherever it is
  *   POST /api/retro/usb-folder?mount=<USB mount point>   creates SonicWebMania/retro on the drive
+ *   POST /api/move?pack=mania|<game>-<edition>&dest=tv|usb[&mount=<USB mount point>]
+ *                             moves a pack between the TV and a USB drive (not one in use)
+ *
+ * Packs the running game reads from (TransferServer::SetPacksInUse) are never
+ * moved, replaced or removed: the engine reopens them by path for every file.
  */
 #include "TransferServer.h"
 
@@ -33,6 +41,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <limits>
@@ -182,6 +191,98 @@ bool FilesFolder(const httplib::Request &req, std::string *folder)
     return true;
 }
 
+/** Canonical form of @p path, to compare paths that may be spelled differently. */
+std::string CanonicalPath(const std::string &path)
+{
+    std::error_code ec;
+    const std::filesystem::path canonical = std::filesystem::weakly_canonical(path, ec);
+    return ec ? path : canonical.string();
+}
+
+/** Where an upload or a move is going: the TV, or a USB drive. */
+struct Destination {
+    bool usb = false;
+    UsbDrive drive;          ///< The drive, when @c usb.
+    std::uint64_t free   = 0; ///< Bytes free there.
+    std::uint64_t margin = 0; ///< Bytes to keep free there on top of the file.
+};
+
+/**
+ * Reads ?dest=tv|usb&mount=... (the TV when there is no dest).
+ * @return False with an HTTP error already set when the drive is unusable.
+ */
+bool ParseDestination(const httplib::Request &req, const Storage &storage, Destination *dest, httplib::Response &res)
+{
+    if (req.get_param_value("dest") != "usb") {
+        dest->usb    = false;
+        dest->free   = storage.FreeBytes();
+        dest->margin = Storage::kSafetyMarginBytes;
+        return true;
+    }
+    if (!FindUsbDrive(req.get_param_value("mount"), &dest->drive)) {
+        Fail(res, 404, "That USB drive is not connected.");
+        return false;
+    }
+    if (!dest->drive.writable) {
+        Fail(res, 403, "That USB drive is read-only.");
+        return false;
+    }
+    dest->usb    = true;
+    dest->free   = dest->drive.freeBytes;
+    dest->margin = kUsbSafetyMarginBytes;
+    return true;
+}
+
+/** The USB drive @p path is on, if any. */
+bool DriveOf(const std::string &path, UsbDrive *drive)
+{
+    for (const UsbDrive &candidate : ListUsbDrives()) {
+        if (path.rfind(candidate.mountPoint + "/", 0) == 0) {
+            *drive = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Copies @p from to @p to in chunks, flushing it to storage, reporting the
+ * running total to @p onProgress. @return False on any read or write error.
+ */
+template <typename ProgressFn>
+bool CopyFileWithProgress(const std::string &from, const std::string &to, ProgressFn onProgress)
+{
+    std::FILE *in = std::fopen(from.c_str(), "rb");
+    if (!in)
+        return false;
+    std::FILE *out = std::fopen(to.c_str(), "wb");
+    if (!out) {
+        std::fclose(in);
+        return false;
+    }
+
+    std::vector<char> buffer(1024 * 1024);
+    std::uint64_t total = 0;
+    bool ok             = true;
+    for (;;) {
+        const std::size_t read = std::fread(buffer.data(), 1, buffer.size(), in);
+        if (read == 0) {
+            ok = !std::ferror(in);
+            break;
+        }
+        if (std::fwrite(buffer.data(), 1, read, out) != read) {
+            ok = false;
+            break;
+        }
+        total += read;
+        onProgress(total);
+    }
+    ok = ok && std::fflush(out) == 0 && fsync(fileno(out)) == 0;
+    std::fclose(out);
+    std::fclose(in);
+    return ok;
+}
+
 /** JSON array of @p files. */
 std::string FileListJson(const std::vector<UserFile> &files)
 {
@@ -225,6 +326,9 @@ bool TransferServer::Start()
     server_->set_payload_max_length(std::numeric_limits<std::size_t>::max());
     server_->set_read_timeout(30, 0);
     server_->set_write_timeout(30, 0);
+    // One request per connection: with two workers, browsers' idle keep-alive
+    // connections would otherwise hold both and stall the page's next request.
+    server_->set_keep_alive_max_count(1);
     RegisterRoutes();
 
     for (int attempt = 0; attempt < kPortAttempts; ++attempt) {
@@ -271,6 +375,24 @@ void TransferServer::NoteRestartNeeded()
     status_.restartPending = status_.restartPending || !setupMode_.load();
 }
 
+void TransferServer::SetPacksInUse(const std::vector<std::string> &paths)
+{
+    std::vector<std::string> canonical;
+    for (const std::string &path : paths) {
+        if (!path.empty())
+            canonical.push_back(CanonicalPath(path));
+    }
+    std::lock_guard<std::mutex> lock(packsMutex_);
+    packsInUse_ = std::move(canonical);
+}
+
+bool TransferServer::IsPackInUse(const std::string &path) const
+{
+    const std::string canonical = CanonicalPath(path);
+    std::lock_guard<std::mutex> lock(packsMutex_);
+    return std::find(packsInUse_.begin(), packsInUse_.end(), canonical) != packsInUse_.end();
+}
+
 void TransferServer::RegisterRoutes()
 {
     httplib::Server &server = *server_;
@@ -297,8 +419,10 @@ void TransferServer::RegisterRoutes()
 
     server.Get("/api/status", [this](const httplib::Request &, httplib::Response &res) {
         const TransferStatus status = Snapshot();
-        const std::string packPath  = storage_.PathFor(Storage::kDataPackName);
-        const bool packValid        = Storage::IsValidDataPackHeader(packPath);
+        const std::string packPath  = storage_.DataPackPath();
+        const bool packValid        = !packPath.empty();
+        UsbDrive packDrive;
+        const bool packOnUsb = packValid && DriveOf(packPath, &packDrive);
 
         std::ostringstream json;
         json << "{\"version\":\"" << kAppVersion << "\""
@@ -306,9 +430,13 @@ void TransferServer::RegisterRoutes()
              << ",\"freeBytes\":" << storage_.FreeBytes() << ",\"safetyMarginBytes\":" << Storage::kSafetyMarginBytes
              << ",\"persistent\":" << (storage_.IsPersistent() ? "true" : "false")
              << ",\"dataPack\":{\"present\":" << (packValid ? "true" : "false")
-             << ",\"size\":" << (packValid ? Storage::FileSize(packPath) : 0) << "}"
+             << ",\"size\":" << (packValid ? Storage::FileSize(packPath) : 0) << ",\"location\":\""
+             << (packOnUsb ? "usb" : "tv") << "\",\"mount\":\"" << JsonEscape(packOnUsb ? packDrive.mountPoint : "")
+             << "\",\"inUse\":" << (packValid && IsPackInUse(packPath) ? "true" : "false") << "}"
              << ",\"plusEnabled\":" << (config_.IsPlusEnabled() ? "true" : "false")
              << ",\"retroEnabled\":" << (config_.IsRetroEnabled() ? "true" : "false")
+             << ",\"maniaAudio\":" << (config_.IsManiaAudioEnabled() ? "true" : "false")
+             << ",\"maniaSimilarMusic\":" << (config_.IsManiaSimilarMusicEnabled() ? "true" : "false")
              << ",\"restartPending\":" << (status.restartPending ? "true" : "false")
              << ",\"upload\":{\"active\":" << (status.uploading ? "true" : "false")
              << ",\"received\":" << status.receivedBytes << ",\"expected\":" << status.expectedBytes << "}}";
@@ -320,19 +448,29 @@ void TransferServer::RegisterRoutes()
         if (!ContentLength(req, &expected) || expected < kMinimumPackBytes)
             return Fail(res, 411, "The upload must state its size (Content-Length).");
 
+        // Where it goes: the data folder on the TV, or SonicWebMania/ on a USB drive.
+        Destination dest;
+        if (!ParseDestination(req, storage_, &dest, res))
+            return;
+        const std::string folder = dest.usb ? Storage::UsbFolder(dest.drive.mountPoint) : storage_.Root();
+        const std::string target = dest.usb ? Storage::UsbDataPackPath(dest.drive.mountPoint) : storage_.PathFor(Storage::kDataPackName);
+        const std::uint64_t needed = expected + dest.margin;
+        if (needed > dest.free) {
+            return Fail(res, 507,
+                        std::string("Not enough space on the ") + (dest.usb ? "USB drive" : "TV") + ": this file needs "
+                            + HumanBytes(needed) + " (including a safety margin), " + HumanBytes(dest.free) + " is free.");
+        }
+
         if (uploadInProgress_.exchange(true))
             return Fail(res, 409, "Another upload is already running.");
         // Clear the flag however this handler exits.
         const std::unique_ptr<std::atomic<bool>, void (*)(std::atomic<bool> *)> uploadGuard(
             &uploadInProgress_, [](std::atomic<bool> *flag) { flag->store(false); });
 
-        const std::uint64_t needed = expected + Storage::kSafetyMarginBytes;
-        const std::uint64_t free   = storage_.FreeBytes();
-        if (needed > free) {
-            return Fail(res, 507,
-                        "Not enough space on the TV: this file needs " + HumanBytes(needed) + " (including a safety margin), "
-                            + HumanBytes(free) + " is free.");
-        }
+        std::error_code ec;
+        std::filesystem::create_directories(folder, ec);
+        if (ec)
+            return Fail(res, 500, "Could not create " + folder + ": " + ec.message());
 
         {
             std::lock_guard<std::mutex> lock(statusMutex_);
@@ -342,7 +480,7 @@ void TransferServer::RegisterRoutes()
         }
         PublishEvent("Receiving game data...");
 
-        const std::string partPath = storage_.PathFor(std::string(Storage::kDataPackName) + ".part");
+        const std::string partPath = target + ".part";
         const std::int64_t written = StreamBodyToFile(reader, partPath, expected, [this](std::uint64_t total) {
             std::lock_guard<std::mutex> lock(statusMutex_);
             status_.receivedBytes = total;
@@ -353,7 +491,6 @@ void TransferServer::RegisterRoutes()
             status_.uploading = false;
         }
 
-        std::error_code ec;
         if (written < 0 || static_cast<std::uint64_t>(written) != expected) {
             std::filesystem::remove(partPath, ec);
             PublishEvent("Upload interrupted. Please try again.");
@@ -365,14 +502,29 @@ void TransferServer::RegisterRoutes()
             return Fail(res, 415, "That file is not a Sonic Mania Data.rsdk (missing RSDK signature).");
         }
 
-        const bool setup          = setupMode_.load();
-        const std::string destination = setup ? storage_.PathFor(Storage::kDataPackName) : storage_.PendingDataPackPath();
+        // While the engine reads Sonic Mania's pack (playing it, or a retro
+        // game borrowing its audio), the new one waits for the next start;
+        // Storage::ApplyPendingFiles() installs it and removes other copies.
+        const std::string current = storage_.DataPackPath();
+        const bool stage          = !current.empty() && IsPackInUse(current);
+        const std::string destination = stage ? Storage::PendingPathFor(target) : target;
         std::filesystem::rename(partPath, destination, ec);
         if (ec) {
             std::filesystem::remove(partPath, ec);
             return Fail(res, 500, "Could not move the file into place.");
         }
+        if (!stage) {
+            // One copy only: the TV's is used first, so another would shadow or confuse.
+            std::vector<std::string> copies = { storage_.PathFor(Storage::kDataPackName) };
+            for (const UsbDrive &drive : ListUsbDrives())
+                copies.push_back(Storage::UsbDataPackPath(drive.mountPoint));
+            for (const std::string &copy : copies) {
+                if (CanonicalPath(copy) != CanonicalPath(target))
+                    std::filesystem::remove(copy, ec);
+            }
+        }
 
+        const bool setup = setupMode_.load();
         {
             std::lock_guard<std::mutex> lock(statusMutex_);
             if (setup)
@@ -380,8 +532,8 @@ void TransferServer::RegisterRoutes()
             else
                 status_.restartPending = true;
         }
-        PublishEvent(setup ? "Game data installed." : "New game data received. Restart to use it.");
-        res.set_content(setup ? "installed" : "staged", kTextType);
+        PublishEvent(setup ? "Game data installed." : stage ? "New game data received. Restart to use it." : "Game data installed.");
+        res.set_content(setup ? "installed" : stage ? "staged" : "stored", kTextType);
     });
 
     server.Get("/api/files", [this](const httplib::Request &, httplib::Response &res) {
@@ -469,7 +621,8 @@ void TransferServer::RegisterRoutes()
     });
 
     server.Put("/api/settings", [this](const httplib::Request &req, httplib::Response &res) {
-        if (!req.has_param("plusEnabled") && !req.has_param("retroEnabled"))
+        if (!req.has_param("plusEnabled") && !req.has_param("retroEnabled") && !req.has_param("maniaAudio")
+            && !req.has_param("maniaSimilarMusic"))
             return Fail(res, 400, "Nothing to change.");
 
         std::string message;
@@ -485,6 +638,19 @@ void TransferServer::RegisterRoutes()
                 return Fail(res, 500, "Could not save the setting.");
             message = enabled ? "Retro games enabled. Restart to apply." : "Retro games disabled. Restart to apply.";
         }
+        if (req.has_param("maniaAudio")) {
+            const bool enabled = req.get_param_value("maniaAudio") == "1";
+            if (!config_.SetManiaAudioEnabled(enabled))
+                return Fail(res, 500, "Could not save the setting.");
+            message = enabled ? "Sonic Mania's audio fills retro gaps. Restart to apply."
+                              : "Sonic Mania's audio no longer used in retro games. Restart to apply.";
+        }
+        if (req.has_param("maniaSimilarMusic")) {
+            const bool enabled = req.get_param_value("maniaSimilarMusic") == "1";
+            if (!config_.SetManiaSimilarMusicEnabled(enabled))
+                return Fail(res, 500, "Could not save the setting.");
+            message = enabled ? "Similar Mania music on. Restart to apply." : "Similar Mania music off. Restart to apply.";
+        }
 
         NoteRestartNeeded();
         PublishEvent(message);
@@ -497,8 +663,8 @@ void TransferServer::RegisterRoutes()
 namespace
 {
 
-/** JSON for one pack slot of a retro game. */
-std::string PackJson(const RetroPack &pack)
+/** JSON for one pack slot of a retro game (@p inUse: the running game reads it). */
+std::string PackJson(const RetroPack &pack, bool inUse)
 {
     std::ostringstream json;
     json << "{\"state\":\"" << PackStateName(pack.state) << "\"";
@@ -507,7 +673,7 @@ std::string PackJson(const RetroPack &pack)
              << "\",\"size\":" << pack.size;
         if (pack.version)
             json << ",\"version\":\"" << pack.version << "\"";
-        json << ",\"standalone\":" << (pack.standalone ? "true" : "false");
+        json << ",\"standalone\":" << (pack.standalone ? "true" : "false") << ",\"inUse\":" << (inUse ? "true" : "false");
     }
     json << "}";
     return json.str();
@@ -569,8 +735,10 @@ void TransferServer::RegisterRetroRoutes()
             json << (first ? "" : ",") << "{\"id\":\"" << game.info.id << "\",\"title\":\"" << JsonEscape(game.info.title)
                  << "\",\"playable\":" << (game.Playable() ? "true" : "false")
                  << ",\"sound\":" << (game.HasSound() ? "true" : "false") << ",\"mode\":\""
-                 << JsonEscape(game.ModeDescription()) << "\",\"origins\":" << PackJson(game.origins)
-                 << ",\"classic\":" << PackJson(game.classic) << "}";
+                 << JsonEscape(game.ModeDescription()) << "\",\"origins\":"
+                 << PackJson(game.origins, game.origins.state != PackState::Missing && IsPackInUse(game.origins.path))
+                 << ",\"classic\":" << PackJson(game.classic, game.classic.state != PackState::Missing && IsPackInUse(game.classic.path))
+                 << "}";
             first = false;
         }
         json << "]}";
@@ -629,6 +797,13 @@ void TransferServer::RegisterRetroRoutes()
                             + HumanBytes(free) + " is free.");
         }
 
+        // Installing replaces this pack wherever it is: not while the game reads it.
+        const std::string label = PackLabel(*game, edition);
+        for (const std::string &other : AllPackFolders(retro_)) {
+            if (IsPackInUse(other + "/" + RetroLibrary::PackFileName(game->id, edition)))
+                return Fail(res, 409, label + " is in use by the game running now. Switch to another game first.");
+        }
+
         std::error_code ec;
         std::filesystem::create_directories(folder, ec);
         if (ec)
@@ -645,7 +820,6 @@ void TransferServer::RegisterRetroRoutes()
             status_.receivedBytes = 0;
             status_.expectedBytes = expected;
         }
-        const std::string label = PackLabel(*game, edition);
         PublishEvent("Receiving " + label + "...");
 
         const std::string fileName = RetroLibrary::PackFileName(game->id, edition);
@@ -725,7 +899,11 @@ void TransferServer::RegisterRetroRoutes()
             return Fail(res, 404, "Unknown game or edition.");
 
         const std::string fileName = RetroLibrary::PackFileName(game->id, edition);
-        int removed                = 0;
+        for (const std::string &folder : AllPackFolders(retro_)) {
+            if (IsPackInUse(folder + "/" + fileName))
+                return Fail(res, 409, PackLabel(*game, edition) + " is in use by the game running now. Switch to another game first.");
+        }
+        int removed = 0;
         for (const std::string &folder : AllPackFolders(retro_)) {
             std::error_code ec;
             if (std::filesystem::remove(folder + "/" + fileName, ec))
@@ -737,6 +915,102 @@ void TransferServer::RegisterRetroRoutes()
         NoteRestartNeeded();
         PublishEvent(PackLabel(*game, edition) + " removed.");
         res.set_content("removed", kTextType);
+    });
+
+    server.Post("/api/move", [this](const httplib::Request &req, httplib::Response &res) {
+        // Which pack: "mania", or "<game>-<edition>" (sonic1-origins...).
+        const std::string pack = req.get_param_value("pack");
+        std::string source, label, fileName;
+        bool retroPack = false;
+        if (pack == "mania") {
+            source   = storage_.DataPackPath();
+            label    = "Sonic Mania's Data.rsdk";
+            fileName = Storage::kDataPackName;
+        }
+        else {
+            const std::size_t dash = pack.rfind('-');
+            RetroEdition edition   = RetroEdition::Origins;
+            const RetroGameInfo *game = dash == std::string::npos ? nullptr : RetroLibrary::FindGame(pack.substr(0, dash));
+            if (!game || !ParseEdition(pack.substr(dash + 1), &edition))
+                return Fail(res, 404, "Unknown pack.");
+            for (const RetroGame &found : retro_.Scan()) {
+                if (found.info.id == std::string(game->id)) {
+                    const RetroPack &slot = edition == RetroEdition::Origins ? found.origins : found.classic;
+                    if (slot.state != PackState::Missing)
+                        source = slot.path;
+                }
+            }
+            label     = PackLabel(*game, edition);
+            fileName  = RetroLibrary::PackFileName(game->id, edition);
+            retroPack = true;
+        }
+        if (source.empty())
+            return Fail(res, 404, label + " is not installed.");
+        if (IsPackInUse(source))
+            return Fail(res, 409, label + " is in use by the game running now. Switch to another game first.");
+
+        Destination dest;
+        if (!ParseDestination(req, storage_, &dest, res))
+            return;
+        const std::string folder = retroPack ? (dest.usb ? RetroLibrary::UsbPackFolder(dest.drive.mountPoint) : retro_.TvPackFolder())
+                                             : (dest.usb ? Storage::UsbFolder(dest.drive.mountPoint) : storage_.Root());
+        const std::string target = folder + "/" + fileName;
+        if (CanonicalPath(target) == CanonicalPath(source))
+            return Fail(res, 400, label + " is already there.");
+
+        const std::uint64_t size = Storage::FileSize(source);
+        if (size + dest.margin > dest.free) {
+            return Fail(res, 507,
+                        "Not enough space there: " + label + " needs " + HumanBytes(size + dest.margin)
+                            + " (including a safety margin), " + HumanBytes(dest.free) + " is free.");
+        }
+
+        if (uploadInProgress_.exchange(true))
+            return Fail(res, 409, "Another upload or move is already running.");
+        const std::unique_ptr<std::atomic<bool>, void (*)(std::atomic<bool> *)> uploadGuard(
+            &uploadInProgress_, [](std::atomic<bool> *flag) { flag->store(false); });
+
+        std::error_code ec;
+        std::filesystem::create_directories(folder, ec);
+        if (ec)
+            return Fail(res, 500, "Could not create " + folder + ": " + ec.message());
+
+        // Copy, then remove the original: the TV and a drive are different file systems.
+        {
+            std::lock_guard<std::mutex> lock(statusMutex_);
+            status_.uploading     = true;
+            status_.receivedBytes = 0;
+            status_.expectedBytes = size;
+        }
+        PublishEvent(std::string("Moving ") + label + " to the " + (dest.usb ? "USB drive" : "TV") + "...");
+        const std::string partPath = target + ".part";
+        const bool copied          = CopyFileWithProgress(source, partPath, [this](std::uint64_t total) {
+            std::lock_guard<std::mutex> lock(statusMutex_);
+            status_.receivedBytes = total;
+        });
+        {
+            std::lock_guard<std::mutex> lock(statusMutex_);
+            status_.uploading = false;
+        }
+        if (!copied || Storage::FileSize(partPath) != size) {
+            std::filesystem::remove(partPath, ec);
+            PublishEvent("Could not move " + label + ".");
+            return Fail(res, 500, "Could not copy " + label + " there (the original is untouched).");
+        }
+        std::filesystem::rename(partPath, target, ec);
+        if (ec) {
+            std::filesystem::remove(partPath, ec);
+            return Fail(res, 500, "Could not move the file into place (the original is untouched).");
+        }
+        std::filesystem::remove(source, ec);
+        if (ec) {
+            // Keep exactly one copy: the original stays, the new one goes.
+            std::filesystem::remove(target, ec);
+            return Fail(res, 500, "Could not remove the original " + label + ", so it was left where it was.");
+        }
+
+        PublishEvent(label + std::string(" moved to the ") + (dest.usb ? "USB drive." : "TV."));
+        res.set_content("moved", kTextType);
     });
 }
 

@@ -4,6 +4,7 @@
  */
 #include "RetroGames.h"
 
+#include "IniEdit.h"
 #include "RsdkPack.h"
 #include "Storage.h"
 #include "UsbDrives.h"
@@ -28,103 +29,6 @@ constexpr std::uint64_t kMinimumPackBytes = 64;
 constexpr int kGameTypeStandalone = 0; ///< The earlier releases.
 constexpr int kGameTypeOrigins    = 1; ///< Sonic Origins.
 
-/** Removes leading and trailing blanks. */
-std::string Trim(const std::string &text)
-{
-    const std::size_t first = text.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos)
-        return {};
-    const std::size_t last = text.find_last_not_of(" \t\r\n");
-    return text.substr(first, last - first + 1);
-}
-
-/** Reads a whole text file ("" when it does not exist). */
-std::string ReadText(const std::string &path)
-{
-    std::ifstream in(path, std::ios::binary);
-    std::ostringstream text;
-    text << in.rdbuf();
-    return text.str();
-}
-
-/**
- * Returns @p ini with the keys of @p values set inside section [@p section]:
- * existing lines are replaced in place, missing keys are added at the end of
- * the section, and the section is appended when the file has none. Keys are
- * compared without regard to case, as the engine's ini parser does.
- */
-std::string SetIniValues(const std::string &ini, const std::string &section,
-                         const std::vector<std::pair<std::string, std::string>> &values)
-{
-    auto lower = [](std::string text) {
-        for (char &c : text)
-            c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
-        return text;
-    };
-
-    std::vector<std::string> lines;
-    {
-        std::istringstream in(ini);
-        std::string line;
-        while (std::getline(in, line)) {
-            if (!line.empty() && line.back() == '\r')
-                line.pop_back();
-            lines.push_back(line);
-        }
-    }
-
-    std::vector<bool> written(values.size(), false);
-    const std::string wantedSection = lower(section);
-    bool inSection                  = false;
-    std::size_t sectionEnd          = std::string::npos; // Index after the last line of the section.
-
-    for (std::size_t i = 0; i < lines.size(); ++i) {
-        const std::string trimmed = Trim(lines[i]);
-        if (!trimmed.empty() && trimmed.front() == '[') {
-            const std::size_t close = trimmed.find(']');
-            inSection               = close != std::string::npos && lower(Trim(trimmed.substr(1, close - 1))) == wantedSection;
-            if (inSection)
-                sectionEnd = i + 1;
-            continue;
-        }
-        if (!inSection)
-            continue;
-        if (!trimmed.empty())
-            sectionEnd = i + 1;
-
-        const std::size_t equals = trimmed.find('=');
-        if (equals == std::string::npos)
-            continue;
-        const std::string key = lower(Trim(trimmed.substr(0, equals)));
-        for (std::size_t v = 0; v < values.size(); ++v) {
-            if (key == lower(values[v].first)) {
-                lines[i]   = values[v].first + "=" + values[v].second;
-                written[v] = true;
-            }
-        }
-    }
-
-    std::vector<std::string> missing;
-    for (std::size_t v = 0; v < values.size(); ++v) {
-        if (!written[v])
-            missing.push_back(values[v].first + "=" + values[v].second);
-    }
-    if (sectionEnd == std::string::npos) {
-        if (!lines.empty() && !Trim(lines.back()).empty())
-            lines.emplace_back();
-        lines.push_back("[" + section + "]");
-        lines.insert(lines.end(), missing.begin(), missing.end());
-    }
-    else {
-        lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(sectionEnd), missing.begin(), missing.end());
-    }
-
-    std::string out;
-    for (const std::string &line : lines)
-        out += line + "\n";
-    return out;
-}
-
 } // namespace
 
 const std::vector<RetroGameInfo> &RetroCatalogue()
@@ -144,7 +48,7 @@ std::string RetroGame::ModeDescription() const
     if (hasOrigins && hasClassic)
         return "Sonic Origins, sound from the classic release";
     if (hasOrigins)
-        return "Sonic Origins, no sound (add the classic pack for sound)";
+        return "Sonic Origins, no sound pack (sound from the classic pack or Sonic Mania)";
     if (hasClassic && classic.standalone)
         return "Classic release";
     if (hasClassic)
@@ -267,7 +171,8 @@ std::vector<RetroGame> RetroLibrary::ScanPlayable() const
     return playable;
 }
 
-bool RetroLibrary::PrepareLaunch(const RetroGame &game, const std::string &defaultSettings, std::string *error) const
+bool RetroLibrary::PrepareLaunch(const RetroGame &game, const std::string &defaultSettings, const std::string &audioPack,
+                                 std::string *error) const
 {
     if (!game.Playable()) {
         if (error)
@@ -291,30 +196,12 @@ bool RetroLibrary::PrepareLaunch(const RetroGame &game, const std::string &defau
     const std::string extraFile = origins && game.HasSound() ? game.classic.path : std::string();
     const int gameType          = origins ? kGameTypeOrigins : kGameTypeStandalone;
 
-    const std::string settingsPath = folder + "/Settings.ini";
-    std::string ini                = ReadText(settingsPath);
-    if (Trim(ini).empty())
-        ini = defaultSettings;
-    ini = SetIniValues(ini, "Game",
-                       { { "dataFile", dataFile }, { "extraDataFile", extraFile }, { "gameType", std::to_string(gameType) } });
-
-    const std::string partPath = settingsPath + ".part";
-    {
-        std::ofstream out(partPath, std::ios::binary | std::ios::trunc);
-        out << ini;
-        if (!out) {
-            if (error)
-                *error = "cannot write " + settingsPath;
-            return false;
-        }
-    }
-    std::filesystem::rename(partPath, settingsPath, ec);
-    if (ec) {
-        if (error)
-            *error = "cannot replace " + settingsPath + ": " + ec.message();
-        return false;
-    }
-    return true;
+    return UpdateIniFile(folder + "/Settings.ini", defaultSettings, "Game",
+                         { { "dataFile", dataFile },
+                           { "extraDataFile", extraFile },
+                           { "audioDataFile", audioPack },
+                           { "gameType", std::to_string(gameType) } },
+                         error);
 }
 
 } // namespace swm

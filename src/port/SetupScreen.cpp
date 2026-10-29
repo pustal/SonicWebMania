@@ -81,11 +81,12 @@ void DrawScreen(SDL_Renderer *renderer, const TextRenderer &text, const ScreenSt
         return;
     }
 
-    text.DrawTextCentered(center, y, "The game data file (Data.rsdk) is needed.", 1, kText);
+    // At most 60 characters per line: the 8-pixel font on the 480-pixel canvas.
+    text.DrawTextCentered(center, y, "Add Sonic Mania's game data (Data.rsdk)", 1, kText);
     y += kLineHeight;
-    text.DrawTextCentered(center, y, "Use the one from your own copy of Sonic Mania.", 1, kDim);
+    text.DrawTextCentered(center, y, "or Sonic 1, 2 or CD (Retro games, on the page).", 1, kText);
     y += kLineHeight;
-    text.DrawTextCentered(center, y, "(Or add Sonic 1, 2 or CD under Retro games on the page.)", 1, kDim);
+    text.DrawTextCentered(center, y, "From your own copies of the games. Either is enough.", 1, kDim);
     y += kLineHeight * 2;
 
     if (!server || server->Port() == 0) {

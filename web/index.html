@@ -61,13 +61,19 @@
       <p id="status-line">Loading...</p>
       <p id="space-line" class="dim"></p>
       <p id="restart-line" class="warn hidden">Some uploads are waiting. On the TV press BACK and choose "Restart game" to apply them.</p>
+      <p>Store packs on: <select id="pack-dest"></select>
+        <button id="pack-folder" class="secondary hidden" type="button">Create the folder on this drive</button></p>
+      <p id="pack-dest-line" class="dim"></p>
     </section>
 
     <section>
-      <h2>Game data (Data.rsdk)</h2>
-      <p class="dim">Use the Data.rsdk from your own copy of Sonic Mania (for example the Steam version's install folder).</p>
-      <label class="button" for="data-file">Choose Data.rsdk</label>
+      <h2>Sonic Mania (Data.rsdk)</h2>
+      <p class="dim">Use the Data.rsdk from your own copy of Sonic Mania (for example the Steam version's install folder).
+        Optional: the app can be used for the retro games alone.</p>
+      <p id="mania-line"></p>
+      <label class="button" for="data-file" id="data-choose">Choose Data.rsdk</label>
       <input id="data-file" type="file" accept=".rsdk">
+      <button id="mania-move" class="secondary hidden" type="button"></button>
       <progress id="data-progress" class="hidden" max="100" value="0"></progress>
       <p id="data-message"></p>
     </section>
@@ -83,12 +89,16 @@
     <section id="retro-section">
       <h2>Retro games (Sonic 1, 2 and CD)</h2>
       <label><input id="retro-toggle" type="checkbox"> Offer the retro games in the BACK menu</label>
+      <p id="retro-always" class="dim hidden">Without Sonic Mania's data the retro games are always offered.</p>
       <p class="dim">Played from your own data packs. With the pack from Sonic Origins alone a game has no sound
         (Origins keeps its music elsewhere); add the pack of the earlier release and its music and sound effects are used.
-        The earlier Sonic 1 and 2 packs also play on their own. Takes effect after a restart.</p>
-      <p>Keep the packs on: <select id="retro-dest"></select>
-        <button id="retro-folder" class="secondary hidden" type="button">Create the folder on this drive</button></p>
-      <p id="retro-dest-line" class="dim"></p>
+        The earlier Sonic 1 and 2 packs and the mobile Sonic CD pack also play on their own. Takes effect after a restart.</p>
+      <p><label><input id="mania-audio" type="checkbox"> Fill missing music and sounds from Sonic Mania</label></p>
+      <p class="dim">With Sonic Mania's Data.rsdk installed: sounds the packs lack (all of them with the Origins pack alone,
+        and the Drop Dash, Knuckles' and Amy's moves otherwise) and the zones Mania remixed (Green Hill, Chemical Plant,
+        Oil Ocean, Stardust Speedway, Metallic Madness, the jingles).</p>
+      <p><label><input id="mania-similar" type="checkbox"> Also give other zones a Mania track of similar feel</label></p>
+      <p class="dim">For example Emerald Hill plays Green Hill and Casino Night plays Studiopolis. Takes effect after a restart.</p>
       <div id="retro-games"></div>
       <progress id="retro-progress" class="hidden" max="100" value="0"></progress>
       <p id="retro-message"></p>
@@ -111,15 +121,16 @@
 'use strict';
 
 /**
- * @typedef {{ present: boolean, size: number }} DataPackState
+ * @typedef {{ present: boolean, size: number, location: 'tv'|'usb', mount: string, inUse: boolean }} DataPackState
  * @typedef {{ active: boolean, received: number, expected: number }} UploadState
  * @typedef {{ version: string, mode: 'setup'|'game', freeBytes: number, safetyMarginBytes: number, persistent: boolean,
- *             dataPack: DataPackState, plusEnabled: boolean, retroEnabled: boolean, restartPending: boolean,
+ *             dataPack: DataPackState, plusEnabled: boolean, retroEnabled: boolean, maniaAudio: boolean,
+ *             maniaSimilarMusic: boolean, restartPending: boolean,
  *             upload: UploadState }} Status
  * @typedef {{ name: string, size: number, mtime: number }} UserFile
  * @typedef {{ id: string, title: string, files: UserFile[] }} GameFiles
  * @typedef {{ state: 'missing'|'ready'|'unsupported'|'invalid', location?: 'tv'|'usb', path?: string, size?: number,
- *             version?: string, standalone?: boolean }} RetroPack
+ *             version?: string, standalone?: boolean, inUse?: boolean }} RetroPack
  * @typedef {{ id: string, title: string, playable: boolean, sound: boolean, mode: string,
  *             origins: RetroPack, classic: RetroPack }} RetroGame
  * @typedef {{ mount: string, name: string, fileSystem: string, freeBytes: number, totalBytes: number,
@@ -141,15 +152,16 @@ const USB_MARGIN_BYTES = 8 * 1024 * 1024;
 const RETRO_HINTS = {
   sonic1: { origins: 'Sonic1u.rsdk from Sonic Origins', classic: 'Data.rsdk of the 2013 release (Android: Data.rsdk.xmf in the APK)' },
   sonic2: { origins: 'Sonic2u.rsdk from Sonic Origins', classic: 'Data.rsdk of the 2013 release (Android: Data.rsdk.xmf in the APK)' },
-  soniccd: { origins: 'SonicCDu.rsdk from Sonic Origins', classic: 'Data.rsdk of the 2011 release (Steam); converted on the TV, sound only' },
+  soniccd: { origins: 'SonicCDu.rsdk from Sonic Origins',
+    classic: 'Mobile release: Data.rsdk.xmf in the APK (plays on its own). Steam: Data.rsdk (sound only). Converted on the TV' },
 };
 
 /** @type {Status | null} */
 let lastStatus = null;
 /** @type {RetroState | null} */
 let lastRetro = null;
-/** True while a retro pack upload runs (one at a time). */
-let retroBusy = false;
+/** True while a pack upload or move runs (one at a time). */
+let packBusy = false;
 /** The retro games' ids, from the last file listing (for the download-name prefix). */
 let retroGameIds = /** @type {string[]} */ ([]);
 
@@ -213,11 +225,12 @@ async function refreshStatus() {
   if (status.dataPack.present) {
     statusLine.textContent = 'Game data installed (' + humanBytes(status.dataPack.size) + ').';
     statusLine.className = 'ok';
-  } else if (status.retroEnabled && lastRetro && lastRetro.games.some((g) => g.playable)) {
-    statusLine.textContent = 'No Sonic Mania data, but retro games can be played.';
-    statusLine.className = '';
+  } else if (lastRetro && lastRetro.games.some((g) => g.playable)) {
+    // Without Sonic Mania the retro games are offered whatever the toggle says (see main.cpp).
+    statusLine.textContent = 'Retro games ready (Sonic Mania not installed, which is fine).';
+    statusLine.className = 'ok';
   } else {
-    statusLine.textContent = 'No game data yet. Upload your Data.rsdk below.';
+    statusLine.textContent = 'No game data yet. Upload Sonic Mania\'s Data.rsdk or a retro game pack below.';
     statusLine.className = 'warn';
   }
 
@@ -225,27 +238,115 @@ async function refreshStatus() {
     + (status.persistent ? '' : ' (temporary storage: lost on reboot)');
   byId('restart-line').classList.toggle('hidden', !status.restartPending);
   /** @type {HTMLInputElement} */ (byId('plus-toggle')).checked = status.plusEnabled;
-  /** @type {HTMLInputElement} */ (byId('retro-toggle')).checked = status.retroEnabled;
+  // Without Sonic Mania the toggle has no effect: show it on and locked.
+  const retroToggle = /** @type {HTMLInputElement} */ (byId('retro-toggle'));
+  retroToggle.checked = status.retroEnabled || !status.dataPack.present;
+  retroToggle.disabled = !status.dataPack.present;
+  byId('retro-always').classList.toggle('hidden', status.dataPack.present);
+  /** @type {HTMLInputElement} */ (byId('mania-audio')).checked = status.maniaAudio;
+  const similar = /** @type {HTMLInputElement} */ (byId('mania-similar'));
+  similar.checked = status.maniaSimilarMusic;
+  similar.disabled = !status.maniaAudio;
+  renderManiaPack();
 }
 
-/** The storage chosen in the "Keep the packs on" list: "tv" or a USB mount point. */
-function retroDestination() {
-  return /** @type {HTMLSelectElement} */ (byId('retro-dest')).value || 'tv';
+/** The storage chosen in the "Store packs on" list: "tv" or a USB mount point. */
+function packDestination() {
+  return /** @type {HTMLSelectElement} */ (byId('pack-dest')).value || 'tv';
 }
 
 /** Free bytes and safety margin of the chosen storage. */
-function retroSpace() {
-  const dest = retroDestination();
+function packSpace() {
+  const dest = packDestination();
   if (!lastRetro) return { free: 0, margin: 0 };
   if (dest === 'tv') return { free: lastRetro.tv.freeBytes, margin: lastRetro.tv.safetyMarginBytes };
   const drive = lastRetro.drives.find((d) => d.mount === dest);
   return { free: drive ? drive.freeBytes : 0, margin: USB_MARGIN_BYTES };
 }
 
+/** @param {string} dest "tv" or a USB mount point @returns {string} the dest= query for uploads and moves */
+function destinationQuery(dest) {
+  return dest === 'tv' ? 'dest=tv' : 'dest=usb&mount=' + encodeURIComponent(dest);
+}
+
+/**
+ * Where the Move button sends a pack now at @p location: to the TV from a drive,
+ * otherwise to the drive chosen in "Store packs on" (or the first writable one).
+ * @param {'tv'|'usb'|undefined} location @returns {string | null} "tv", a mount point, or null (nowhere to go)
+ */
+function moveTarget(location) {
+  if (location === 'usb') return 'tv';
+  if (!lastRetro) return null;
+  const chosen = packDestination();
+  if (chosen !== 'tv') return chosen;
+  const drive = lastRetro.drives.find((d) => d.writable);
+  return drive ? drive.mount : null;
+}
+
+/** @param {string} target "tv" or a mount point @returns {string} */
+function targetName(target) {
+  if (target === 'tv') return 'the TV';
+  const drive = lastRetro && lastRetro.drives.find((d) => d.mount === target);
+  return 'USB ' + (drive ? drive.name : target);
+}
+
+/**
+ * Moves a pack between the TV and a USB drive, showing the copy's progress.
+ * @param {string} pack "mania" or "<game>-<edition>" @param {string} label @param {string} target
+ * @param {HTMLElement} message @param {HTMLProgressElement} progress
+ */
+async function movePack(pack, label, target, message, progress) {
+  if (packBusy) {
+    message.textContent = 'Wait for the current upload or move to finish.';
+    message.className = 'warn';
+    return;
+  }
+  packBusy = true;
+  progress.classList.remove('hidden');
+  progress.value = 0;
+  message.textContent = 'Moving ' + label + ' to ' + targetName(target) + '... keep this page open.';
+  message.className = '';
+  // The TV reports the copy's progress in its status.
+  const poll = setInterval(async () => {
+    try {
+      const status = /** @type {Status} */ (await (await api('/api/status')).json());
+      if (status.upload.expected > 0) progress.value = Math.floor((status.upload.received / status.upload.expected) * 100);
+    } catch (error) { /* The next poll will tell. */ }
+  }, 1000);
+  const response = await api('/api/move?pack=' + encodeURIComponent(pack) + '&' + destinationQuery(target), { method: 'POST' });
+  clearInterval(poll);
+  packBusy = false;
+  progress.classList.add('hidden');
+  message.textContent = response.ok ? label + ' moved to ' + targetName(target) + '.' : await response.text();
+  message.className = response.ok ? 'ok' : 'warn';
+  await Promise.all([refreshStatus(), refreshRetro()]);
+}
+
+/** Sonic Mania's pack: where it is and its Move button. */
+function renderManiaPack() {
+  if (!lastStatus) return;
+  const pack = lastStatus.dataPack;
+  const line = byId('mania-line');
+  const move = byId('mania-move');
+  byId('data-choose').textContent = pack.present ? 'Replace Data.rsdk' : 'Choose Data.rsdk';
+  if (!pack.present) {
+    line.textContent = 'Not installed.';
+    line.className = 'dim';
+    move.classList.add('hidden');
+    return;
+  }
+  line.textContent = 'Installed on ' + (pack.location === 'usb' ? 'the USB drive' : 'the TV') + ' (' + humanBytes(pack.size) + ')'
+    + (pack.inUse ? '. In use by the game running now: it can be replaced (from the next start) but not moved.' : '.');
+  line.className = 'ok';
+  const target = moveTarget(pack.location);
+  move.classList.toggle('hidden', !target || pack.inUse);
+  if (target) move.textContent = 'Move to ' + targetName(target);
+}
+
 /** Updates the storage list, keeping the current choice; a writable USB drive is preferred (spares the TV's space). */
-function renderRetroDestinations() {
+function renderPackDestinations() {
   if (!lastRetro) return;
-  const select = /** @type {HTMLSelectElement} */ (byId('retro-dest'));
+  const select = /** @type {HTMLSelectElement} */ (byId('pack-dest'));
   const previous = select.value;
   select.replaceChildren();
   for (const drive of lastRetro.drives.filter((d) => d.writable)) {
@@ -261,9 +362,11 @@ function renderRetroDestinations() {
   if (Array.from(select.options).some((o) => o.value === previous)) select.value = previous;
 
   const drive = lastRetro.drives.find((d) => d.mount === select.value);
-  byId('retro-folder').classList.toggle('hidden', !drive || drive.hasFolder);
-  byId('retro-dest-line').textContent = drive
-    ? 'Packs go in ' + drive.folder + (drive.hasFolder ? '' : ' (created with the first upload)')
+  byId('pack-folder').classList.toggle('hidden', !drive || drive.hasFolder);
+  renderManiaPack();
+  byId('pack-dest-line').textContent = drive
+    ? 'On the drive, Sonic Mania\'s Data.rsdk goes in the SonicWebMania folder and the retro packs in SonicWebMania/retro'
+      + (drive.hasFolder ? '.' : ' (created with the first upload).')
     : 'Packs go in the app\'s storage on the TV. A USB drive saves the TV\'s space.';
 }
 
@@ -284,7 +387,8 @@ function packRow(game, edition) {
     name.append(label + ': ');
     const where = document.createElement('span');
     where.className = 'ok';
-    where.textContent = 'installed on the ' + (pack.location === 'usb' ? 'USB drive' : 'TV') + ' (' + humanBytes(pack.size || 0) + ')';
+    where.textContent = 'installed on the ' + (pack.location === 'usb' ? 'USB drive' : 'TV') + ' (' + humanBytes(pack.size || 0) + ')'
+      + (pack.inUse ? ', in use by the game running now' : '');
     name.append(where);
   } else if (pack.state === 'missing') {
     name.textContent = label + ': not installed';
@@ -311,12 +415,25 @@ function packRow(game, edition) {
     if (input.files && input.files[0]) uploadRetroPack(game, edition, input.files[0]).catch(() => undefined);
     input.value = '';
   });
-  const choose = document.createElement('label');
-  choose.className = 'button';
-  choose.htmlFor = input.id;
-  choose.textContent = pack.state === 'missing' ? 'Upload' : 'Replace';
-  actions.append(input, choose);
-  if (pack.state !== 'missing') {
+  // A pack the running game reads cannot be replaced, moved or removed (the TV refuses).
+  if (!pack.inUse) {
+    const choose = document.createElement('label');
+    choose.className = 'button';
+    choose.htmlFor = input.id;
+    choose.textContent = pack.state === 'missing' ? 'Upload' : 'Replace';
+    actions.append(input, choose);
+  }
+  const target = pack.state === 'ready' && !pack.inUse ? moveTarget(pack.location) : null;
+  if (target) {
+    const move = document.createElement('button');
+    move.type = 'button';
+    move.className = 'secondary';
+    move.textContent = 'Move to ' + targetName(target);
+    move.addEventListener('click', () => movePack(game.id + '-' + edition, game.title + ' (' + label + ')', target,
+      byId('retro-message'), /** @type {HTMLProgressElement} */ (byId('retro-progress'))).catch(() => undefined));
+    actions.append(' ', move);
+  }
+  if (pack.state !== 'missing' && !pack.inUse) {
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'secondary';
@@ -333,7 +450,7 @@ async function refreshRetro() {
   /** @type {RetroState} */
   const state = await response.json();
   lastRetro = state;
-  renderRetroDestinations();
+  renderPackDestinations();
 
   const list = byId('retro-games');
   list.replaceChildren();
@@ -357,7 +474,7 @@ async function refreshRetro() {
 async function uploadRetroPack(game, edition, file) {
   const message = byId('retro-message');
   const progress = /** @type {HTMLProgressElement} */ (byId('retro-progress'));
-  if (retroBusy) {
+  if (packBusy) {
     message.textContent = 'Wait for the current upload to finish.';
     message.className = 'warn';
     return;
@@ -369,7 +486,7 @@ async function uploadRetroPack(game, edition, file) {
     message.className = 'warn';
     return;
   }
-  const space = retroSpace();
+  const space = packSpace();
   const needed = file.size * (oldCdPack ? 2 : 1) + space.margin; // Converting needs room for both copies.
   if (needed > space.free) {
     message.textContent = 'Not enough space there: needs ' + humanBytes(needed) + ', ' + humanBytes(space.free) + ' free.';
@@ -377,9 +494,8 @@ async function uploadRetroPack(game, edition, file) {
     return;
   }
 
-  const dest = retroDestination();
-  const query = dest === 'tv' ? 'dest=tv' : 'dest=usb&mount=' + encodeURIComponent(dest);
-  retroBusy = true;
+  const query = destinationQuery(packDestination());
+  packBusy = true;
   progress.classList.remove('hidden');
   progress.value = 0;
   message.textContent = 'Uploading ' + file.name + ' (' + humanBytes(file.size) + ')... keep this page open.';
@@ -399,7 +515,7 @@ async function uploadRetroPack(game, edition, file) {
     request.send(file);
   });
 
-  retroBusy = false;
+  packBusy = false;
   progress.classList.add('hidden');
   message.textContent = result.ok ? game.title + ': pack installed. It is used from the next start.' : result.text;
   message.className = result.ok ? 'ok' : 'warn';
@@ -503,12 +619,19 @@ async function uploadDataPack(file) {
     message.className = 'warn';
     return;
   }
-  if (lastStatus && file.size + lastStatus.safetyMarginBytes > lastStatus.freeBytes) {
-    message.textContent = 'Not enough space on the TV: needs ' + humanBytes(file.size + lastStatus.safetyMarginBytes)
-      + ', ' + humanBytes(lastStatus.freeBytes) + ' free.';
+  const space = packSpace();
+  if (lastRetro && file.size + space.margin > space.free) {
+    message.textContent = 'Not enough space on ' + targetName(packDestination()) + ': needs ' + humanBytes(file.size + space.margin)
+      + ', ' + humanBytes(space.free) + ' free.';
     message.className = 'warn';
     return;
   }
+  if (packBusy) {
+    message.textContent = 'Wait for the current upload or move to finish.';
+    message.className = 'warn';
+    return;
+  }
+  packBusy = true;
 
   progress.classList.remove('hidden');
   progress.value = 0;
@@ -518,7 +641,7 @@ async function uploadDataPack(file) {
   // XMLHttpRequest, because fetch() cannot report upload progress.
   const result = await new Promise((resolve) => {
     const request = new XMLHttpRequest();
-    request.open('PUT', '/api/data');
+    request.open('PUT', '/api/data?' + destinationQuery(packDestination()));
     request.setRequestHeader('X-Pin', pin());
     request.upload.onprogress = (event) => {
       if (event.lengthComputable) progress.value = Math.floor((event.loaded / event.total) * 100);
@@ -528,6 +651,7 @@ async function uploadDataPack(file) {
     request.send(file);
   });
 
+  packBusy = false;
   progress.classList.add('hidden');
   if (result.ok) {
     message.textContent = result.text === 'installed'
@@ -538,7 +662,7 @@ async function uploadDataPack(file) {
     message.textContent = result.text;
     message.className = 'warn';
   }
-  await refreshStatus();
+  await Promise.all([refreshStatus(), refreshRetro()]);
 }
 
 /**
@@ -593,10 +717,30 @@ byId('retro-toggle').addEventListener('change', async (event) => {
   await refreshStatus();
 });
 
-byId('retro-dest').addEventListener('change', () => renderRetroDestinations());
+byId('pack-dest').addEventListener('change', () => { renderPackDestinations(); refreshRetro().catch(() => undefined); });
 
-byId('retro-folder').addEventListener('click', async () => {
-  const response = await api('/api/retro/usb-folder?mount=' + encodeURIComponent(retroDestination()), { method: 'POST' });
+byId('mania-move').addEventListener('click', () => {
+  const target = lastStatus ? moveTarget(lastStatus.dataPack.location) : null;
+  if (target) {
+    movePack('mania', 'Sonic Mania\'s Data.rsdk', target, byId('data-message'),
+      /** @type {HTMLProgressElement} */ (byId('data-progress'))).catch(() => undefined);
+  }
+});
+
+byId('mania-audio').addEventListener('change', async (event) => {
+  const checked = /** @type {HTMLInputElement} */ (event.target).checked;
+  await api('/api/settings?maniaAudio=' + (checked ? '1' : '0'), { method: 'PUT' });
+  await refreshStatus();
+});
+
+byId('mania-similar').addEventListener('change', async (event) => {
+  const checked = /** @type {HTMLInputElement} */ (event.target).checked;
+  await api('/api/settings?maniaSimilarMusic=' + (checked ? '1' : '0'), { method: 'PUT' });
+  await refreshStatus();
+});
+
+byId('pack-folder').addEventListener('click', async () => {
+  const response = await api('/api/retro/usb-folder?mount=' + encodeURIComponent(packDestination()), { method: 'POST' });
   const message = byId('retro-message');
   message.textContent = response.ok ? 'Folder created.' : await response.text();
   message.className = response.ok ? 'ok' : 'warn';

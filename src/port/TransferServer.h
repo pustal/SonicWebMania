@@ -20,6 +20,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace httplib
 {
@@ -77,6 +78,15 @@ public:
     /** Switches between setup mode (install now) and in-game mode (stage for next launch). */
     void SetSetupMode(bool setupMode) { setupMode_.store(setupMode); }
 
+    /**
+     * The packs the engine reads from this session (Sonic Mania's, or a
+     * retro game's and the one lending it audio). The engine reopens a pack
+     * by its path for every file it reads, so these must stay where they are
+     * until the game is left: the page cannot move, replace or remove them
+     * (a new Data.rsdk for Sonic Mania is staged for the next start instead).
+     */
+    void SetPacksInUse(const std::vector<std::string> &paths);
+
     /** The bound port, or 0 when not running. */
     std::uint16_t Port() const { return port_.load(); }
 
@@ -98,6 +108,9 @@ private:
     /** Records a status event shown on the TV. */
     void PublishEvent(const std::string &message);
 
+    /** True when @p path is one of the packs set by SetPacksInUse(). */
+    bool IsPackInUse(const std::string &path) const;
+
     Storage &storage_;
     PortConfig &config_;
     const RetroLibrary &retro_;
@@ -111,6 +124,9 @@ private:
 
     mutable std::mutex statusMutex_;
     TransferStatus status_;
+
+    mutable std::mutex packsMutex_;
+    std::vector<std::string> packsInUse_; ///< Canonical paths (see SetPacksInUse()).
 };
 
 /** Generates a random 4-digit PIN for this session. */

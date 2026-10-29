@@ -1,0 +1,116 @@
+diff --git a/RSDKv5/RSDK/Scene/Legacy/v3/ScriptLegacyv3.cpp b/RSDKv5/RSDK/Scene/Legacy/v3/ScriptLegacyv3.cpp
+index 7bbc3e2..27d6a82 100644
+--- a/RSDKv5/RSDK/Scene/Legacy/v3/ScriptLegacyv3.cpp
++++ b/RSDKv5/RSDK/Scene/Legacy/v3/ScriptLegacyv3.cpp
+@@ -2075,8 +2075,15 @@ void RSDK::Legacy::v3::ProcessScript(int32 scriptCodeStart, int32 jumpTableStart
+ 
+             if (opcodeType == SCRIPTVAR_VAR) {
+                 int32 arrayVal = 0;
++                // (webOS port) KeyPress/KeyDown written without an index mean the player's
++                // input (any controller), as in the original RSDKv3; the default index (the object's slot)
++                // would read another controller, or past the end of the array.
++                bool32 arrayGiven = true;
+                 switch (scriptCode[scriptCodePtr++]) {
+-                    case VARARR_NONE: arrayVal = objectLoop; break;
++                    case VARARR_NONE:
++                        arrayVal   = objectLoop;
++                        arrayGiven = false;
++                        break;
+                     case VARARR_ARRAY:
+                         if (scriptCode[scriptCodePtr++] == 1)
+                             arrayVal = scriptEng.arrayPosition[scriptCode[scriptCodePtr++]];
+@@ -2639,22 +2646,22 @@ void RSDK::Legacy::v3::ProcessScript(int32 scriptCodeStart, int32 jumpTableStart
+                     case VAR_TOUCHSCREENYPOS: scriptEng.operands[i] = (int32)(touchInfo.y[arrayVal] * SCREEN_YSIZE); break;
+                     case VAR_MUSICVOLUME: scriptEng.operands[i] = musicVolume; break;
+                     case VAR_MUSICCURRENTTRACK: scriptEng.operands[i] = musicCurrentTrack; break;
+-                    case VAR_KEYDOWNUP: scriptEng.operands[i] = controller[arrayVal].keyUp.down; break;
+-                    case VAR_KEYDOWNDOWN: scriptEng.operands[i] = controller[arrayVal].keyDown.down; break;
+-                    case VAR_KEYDOWNLEFT: scriptEng.operands[i] = controller[arrayVal].keyLeft.down; break;
+-                    case VAR_KEYDOWNRIGHT: scriptEng.operands[i] = controller[arrayVal].keyRight.down; break;
+-                    case VAR_KEYDOWNBUTTONA: scriptEng.operands[i] = controller[arrayVal].keyA.down; break;
+-                    case VAR_KEYDOWNBUTTONB: scriptEng.operands[i] = controller[arrayVal].keyB.down; break;
+-                    case VAR_KEYDOWNBUTTONC: scriptEng.operands[i] = controller[arrayVal].keyC.down; break;
+-                    case VAR_KEYDOWNSTART: scriptEng.operands[i] = controller[arrayVal].keyStart.down; break;
+-                    case VAR_KEYPRESSUP: scriptEng.operands[i] = controller[arrayVal].keyUp.press; break;
+-                    case VAR_KEYPRESSDOWN: scriptEng.operands[i] = controller[arrayVal].keyDown.press; break;
+-                    case VAR_KEYPRESSLEFT: scriptEng.operands[i] = controller[arrayVal].keyLeft.press; break;
+-                    case VAR_KEYPRESSRIGHT: scriptEng.operands[i] = controller[arrayVal].keyRight.press; break;
+-                    case VAR_KEYPRESSBUTTONA: scriptEng.operands[i] = controller[arrayVal].keyA.press; break;
+-                    case VAR_KEYPRESSBUTTONB: scriptEng.operands[i] = controller[arrayVal].keyB.press; break;
+-                    case VAR_KEYPRESSBUTTONC: scriptEng.operands[i] = controller[arrayVal].keyC.press; break;
+-                    case VAR_KEYPRESSSTART: scriptEng.operands[i] = controller[arrayVal].keyStart.press; break;
++                    case VAR_KEYDOWNUP: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyUp.down; break;
++                    case VAR_KEYDOWNDOWN: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyDown.down; break;
++                    case VAR_KEYDOWNLEFT: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyLeft.down; break;
++                    case VAR_KEYDOWNRIGHT: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyRight.down; break;
++                    case VAR_KEYDOWNBUTTONA: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyA.down; break;
++                    case VAR_KEYDOWNBUTTONB: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyB.down; break;
++                    case VAR_KEYDOWNBUTTONC: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyC.down; break;
++                    case VAR_KEYDOWNSTART: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyStart.down; break;
++                    case VAR_KEYPRESSUP: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyUp.press; break;
++                    case VAR_KEYPRESSDOWN: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyDown.press; break;
++                    case VAR_KEYPRESSLEFT: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyLeft.press; break;
++                    case VAR_KEYPRESSRIGHT: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyRight.press; break;
++                    case VAR_KEYPRESSBUTTONA: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyA.press; break;
++                    case VAR_KEYPRESSBUTTONB: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyB.press; break;
++                    case VAR_KEYPRESSBUTTONC: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyC.press; break;
++                    case VAR_KEYPRESSSTART: scriptEng.operands[i] = controller[arrayGiven ? arrayVal : CONT_ANY].keyStart.press; break;
+                     case VAR_MENU1SELECTION: scriptEng.operands[i] = gameMenu[0].selection1; break;
+                     case VAR_MENU2SELECTION: scriptEng.operands[i] = gameMenu[1].selection1; break;
+                     case VAR_TILELAYERXSIZE: scriptEng.operands[i] = stageLayouts[arrayVal].xsize; break;
+@@ -3887,8 +3894,15 @@ void RSDK::Legacy::v3::ProcessScript(int32 scriptCodeStart, int32 jumpTableStart
+             int32 opcodeType = scriptCode[scriptCodePtr++];
+             if (opcodeType == SCRIPTVAR_VAR) {
+                 int32 arrayVal = 0;
++                // (webOS port) KeyPress/KeyDown written without an index mean the player's
++                // input (any controller), as in the original RSDKv3; the default index (the object's slot)
++                // would read another controller, or past the end of the array.
++                bool32 arrayGiven = true;
+                 switch (scriptCode[scriptCodePtr++]) { // variable
+-                    case VARARR_NONE: arrayVal = objectLoop; break;
++                    case VARARR_NONE:
++                        arrayVal   = objectLoop;
++                        arrayGiven = false;
++                        break;
+                     case VARARR_ARRAY:
+                         if (scriptCode[scriptCodePtr++] == 1)
+                             arrayVal = scriptEng.arrayPosition[scriptCode[scriptCodePtr++]];
+@@ -4424,22 +4438,22 @@ void RSDK::Legacy::v3::ProcessScript(int32 scriptCodeStart, int32 jumpTableStart
+                     case VAR_TOUCHSCREENYPOS: break;
+                     case VAR_MUSICVOLUME: SetMusicVolume(scriptEng.operands[i]); break;
+                     case VAR_MUSICCURRENTTRACK: break;
+-                    case VAR_KEYDOWNUP: controller[arrayVal].keyUp.down = scriptEng.operands[i]; break;
+-                    case VAR_KEYDOWNDOWN: controller[arrayVal].keyDown.down = scriptEng.operands[i]; break;
+-                    case VAR_KEYDOWNLEFT: controller[arrayVal].keyLeft.down = scriptEng.operands[i]; break;
+-                    case VAR_KEYDOWNRIGHT: controller[arrayVal].keyRight.down = scriptEng.operands[i]; break;
+-                    case VAR_KEYDOWNBUTTONA: controller[arrayVal].keyA.down = scriptEng.operands[i]; break;
+-                    case VAR_KEYDOWNBUTTONB: controller[arrayVal].keyB.down = scriptEng.operands[i]; break;
+-                    case VAR_KEYDOWNBUTTONC: controller[arrayVal].keyC.down = scriptEng.operands[i]; break;
+-                    case VAR_KEYDOWNSTART: controller[arrayVal].keyStart.down = scriptEng.operands[i]; break;
+-                    case VAR_KEYPRESSUP: controller[arrayVal].keyUp.press = scriptEng.operands[i]; break;
+-                    case VAR_KEYPRESSDOWN: controller[arrayVal].keyDown.press = scriptEng.operands[i]; break;
+-                    case VAR_KEYPRESSLEFT: controller[arrayVal].keyLeft.press = scriptEng.operands[i]; break;
+-                    case VAR_KEYPRESSRIGHT: controller[arrayVal].keyRight.press = scriptEng.operands[i]; break;
+-                    case VAR_KEYPRESSBUTTONA: controller[arrayVal].keyA.press = scriptEng.operands[i]; break;
+-                    case VAR_KEYPRESSBUTTONB: controller[arrayVal].keyB.press = scriptEng.operands[i]; break;
+-                    case VAR_KEYPRESSBUTTONC: controller[arrayVal].keyC.press = scriptEng.operands[i]; break;
+-                    case VAR_KEYPRESSSTART: controller[arrayVal].keyStart.press = scriptEng.operands[i]; break;
++                    case VAR_KEYDOWNUP: controller[arrayGiven ? arrayVal : CONT_ANY].keyUp.down = scriptEng.operands[i]; break;
++                    case VAR_KEYDOWNDOWN: controller[arrayGiven ? arrayVal : CONT_ANY].keyDown.down = scriptEng.operands[i]; break;
++                    case VAR_KEYDOWNLEFT: controller[arrayGiven ? arrayVal : CONT_ANY].keyLeft.down = scriptEng.operands[i]; break;
++                    case VAR_KEYDOWNRIGHT: controller[arrayGiven ? arrayVal : CONT_ANY].keyRight.down = scriptEng.operands[i]; break;
++                    case VAR_KEYDOWNBUTTONA: controller[arrayGiven ? arrayVal : CONT_ANY].keyA.down = scriptEng.operands[i]; break;
++                    case VAR_KEYDOWNBUTTONB: controller[arrayGiven ? arrayVal : CONT_ANY].keyB.down = scriptEng.operands[i]; break;
++                    case VAR_KEYDOWNBUTTONC: controller[arrayGiven ? arrayVal : CONT_ANY].keyC.down = scriptEng.operands[i]; break;
++                    case VAR_KEYDOWNSTART: controller[arrayGiven ? arrayVal : CONT_ANY].keyStart.down = scriptEng.operands[i]; break;
++                    case VAR_KEYPRESSUP: controller[arrayGiven ? arrayVal : CONT_ANY].keyUp.press = scriptEng.operands[i]; break;
++                    case VAR_KEYPRESSDOWN: controller[arrayGiven ? arrayVal : CONT_ANY].keyDown.press = scriptEng.operands[i]; break;
++                    case VAR_KEYPRESSLEFT: controller[arrayGiven ? arrayVal : CONT_ANY].keyLeft.press = scriptEng.operands[i]; break;
++                    case VAR_KEYPRESSRIGHT: controller[arrayGiven ? arrayVal : CONT_ANY].keyRight.press = scriptEng.operands[i]; break;
++                    case VAR_KEYPRESSBUTTONA: controller[arrayGiven ? arrayVal : CONT_ANY].keyA.press = scriptEng.operands[i]; break;
++                    case VAR_KEYPRESSBUTTONB: controller[arrayGiven ? arrayVal : CONT_ANY].keyB.press = scriptEng.operands[i]; break;
++                    case VAR_KEYPRESSBUTTONC: controller[arrayGiven ? arrayVal : CONT_ANY].keyC.press = scriptEng.operands[i]; break;
++                    case VAR_KEYPRESSSTART: controller[arrayGiven ? arrayVal : CONT_ANY].keyStart.press = scriptEng.operands[i]; break;
+                     case VAR_MENU1SELECTION: gameMenu[0].selection1 = scriptEng.operands[i]; break;
+                     case VAR_MENU2SELECTION: gameMenu[1].selection1 = scriptEng.operands[i]; break;
+                     case VAR_TILELAYERXSIZE: stageLayouts[arrayVal].xsize = scriptEng.operands[i]; break;
