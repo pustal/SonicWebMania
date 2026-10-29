@@ -62,6 +62,15 @@ int WebOSPort_ShouldQuit(void);
  */
 int WebOSPort_IsPlusEnabled(void);
 
+/**
+ * Called by the legacy (RSDKv3/v4) cores whenever a stage is about to load
+ * (patches/rsdk/0003), with the engine version (3 or 4). Implemented in
+ * src/RetroSaves.cpp: when a retro game leaves its title screen for its first
+ * zone, it shows the save screen (Sonic 1 and 2) or the game's own menu
+ * (Sonic CD), and may change the stage that loads.
+ */
+void WebOSPort_OnLegacyStageLoad(int engineVersion);
+
 #ifdef __cplusplus
 }
 #endif

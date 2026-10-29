@@ -2,7 +2,8 @@
  * @file PortRuntime.h
  * @brief The in-game side of the port: implements the engine hooks declared in
  *        WebOSPortHooks.h, the Back-button menu (with the achievement list and
- *        a button test) and on-screen notifications.
+ *        a button test), the retro games' save screen and on-screen
+ *        notifications.
  */
 #ifndef SWM_PORT_RUNTIME_H
 #define SWM_PORT_RUNTIME_H
@@ -10,6 +11,7 @@
 #include "Achievements.h"
 #include "BitmapFont.h"
 #include "RemoteInput.h"
+#include "SaveSelect.h"
 #include "WebOSPortHooks.h"
 
 #include <SDL.h>
@@ -60,6 +62,16 @@ public:
     /** The game to relaunch into: the one chosen on the "Retro games" page, else the running one. */
     const std::string &NextGame() const { return nextGame_.empty() ? currentGame_ : nextGame_; }
 
+    /**
+     * Shows the save screen (no save, four slots with continue/new game/delete,
+     * then the character) over the frozen frame, and blocks the engine's main
+     * thread until the player chooses. Called from src/RetroSaves.cpp when a
+     * retro game leaves its title screen.
+     *
+     * @return The choice; Cancel when the player backed out or closed the app.
+     */
+    SaveSelectResult RunSaveSelect(const SaveSelectRequest &request);
+
     // ---- Engine hooks (see WebOSPortHooks.h) ----
 
     void OnEngineVideoReady(SDL_Window *window, SDL_Renderer *renderer, SDL_AudioDeviceID audioDevice, WebOSPortRedrawFn redraw);
@@ -72,8 +84,11 @@ private:
     /** Main menu entries; menuItems_ holds the ones shown, in display order. */
     enum class MenuItem { Resume, Achievements, ButtonTest, Games, Restart, Close };
 
-    /** Which page of the menu is showing. */
-    enum class Screen { Main, Achievements, ButtonTest, Games };
+    /** Which page of the menu is showing (the last three are the save screen's). */
+    enum class Screen { Main, Achievements, ButtonTest, Games, SaveSlots, SlotActions, Characters };
+
+    /** Entries of the slot actions page, in display order. */
+    enum class SlotAction { Continue, Delete, Back };
 
     /** A remote key release held back so the game sees the press for at least one frame. */
     struct PendingRelease {
@@ -85,6 +100,17 @@ private:
 
     /** Shows the menu and blocks the engine's main thread until it is closed. */
     void RunMenu();
+
+    /** The blocking loop behind RunMenu() and RunSaveSelect(), starting on page @p first. */
+    void RunModal(Screen first);
+
+    /** Navigation on the save screen's pages. @return True when the screen should close. */
+    bool HandleSaveSlotsAction(MenuAction action);
+    bool HandleSlotActionsAction(MenuAction action);
+    bool HandleCharactersAction(MenuAction action);
+
+    /** Closes the save screen with @p action. @return True (for the handlers above). */
+    bool FinishSaveSelect(SaveSelectAction action, int slot, int character);
 
     /** Handles one event while the menu is open. @return True when the menu should close. */
     bool HandleMenuEvent(const SDL_Event &event, bool *stickWasNeutral);
@@ -118,6 +144,19 @@ private:
     void DrawAchievementsPage(int width, int height, int scale) const;
     void DrawButtonTestPage(int width, int height, int scale) const;
     void DrawGamesPage(int width, int height, int scale) const;
+    void DrawSaveSlotsPage(int width, int height, int scale) const;
+    void DrawSlotActionsPage(int width, int height, int scale) const;
+    void DrawCharactersPage(int width, int height, int scale) const;
+
+    /** Name of character @p id in the current save request ("" if unknown). */
+    std::string CharacterName(int id) const;
+
+    /**
+     * Draws a list page: a title, @p rows (the selected one highlighted), up
+     * to two wrapped lines of @p note under it and a @p footer line.
+     */
+    void DrawListPage(int width, int height, int scale, const std::string &title, const std::vector<std::string> &rows,
+                      int selected, const std::string &note, const std::string &footer) const;
 
     /** Text of a main menu entry. */
     static const char *Label(MenuItem item);
@@ -145,6 +184,14 @@ private:
     std::string currentGame_;
     std::string nextGame_;
     int gameSelected_ = 0;
+
+    SaveSelectRequest saveRequest_;  ///< Shown by the save screen (deleted slots are cleared in place).
+    SaveSelectResult saveResult_;    ///< Filled when the save screen closes.
+    int saveRowSelected_      = 0;   ///< 0 = "No save", 1-4 = slots.
+    int pendingSlot_          = -1;  ///< Slot the character page starts a game in (-1: no save).
+    int slotActionSelected_   = 0;
+    bool deleteArmed_         = false; ///< "Delete" was pressed once; a second press deletes.
+    int characterSelected_    = 0;
 
     bool menuOpen_         = false;
     Screen screen_         = Screen::Main;

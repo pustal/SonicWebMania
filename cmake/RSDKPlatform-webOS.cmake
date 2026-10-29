@@ -17,7 +17,7 @@ set(RETRO_SUBSYSTEM "SDL2" CACHE STRING "The subsystem to use" FORCE)
 
 # Our launcher (src/main.cpp) replaces the engine's main().
 list(REMOVE_ITEM RETRO_FILES RSDKv5/main.cpp)
-add_executable(RetroEngine ${RETRO_FILES} "${SWM_ROOT}/src/main.cpp")
+add_executable(RetroEngine ${RETRO_FILES} "${SWM_ROOT}/src/main.cpp" "${SWM_ROOT}/src/RetroSaves.cpp")
 
 target_compile_definitions(RetroEngine PRIVATE
     RETRO_WEBOS_PORT=1

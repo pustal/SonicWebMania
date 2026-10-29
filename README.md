@@ -2,7 +2,7 @@
 
 # SonicWebMania
 
-**Version 1.1.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+**Version 1.2.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
 and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations,
 built as a **native** webOS app (SDL2), with a few TV-friendly extras:
 
@@ -16,7 +16,8 @@ built as a **native** webOS app (SDL2), with a few TV-friendly extras:
   (when enabled), Restart game, Close app. It also shows the transfer address and this
   project's page.
 - **Retro games (optional).** The engine also plays Sonic the Hedgehog, Sonic 2 and Sonic CD
-  from your own data packs: those of Sonic Origins and/or of the earlier releases. See
+  from your own data packs: those of Sonic Origins and/or of the earlier releases, with
+  save slots. See
   [Retro games](#retro-games).
 - **Achievements.** The game's 18 achievements unlock as you play (the decompilation's
   engine records them in `Achievements.bin`, next to your saves). The menu lists them all,
@@ -99,6 +100,15 @@ How each game plays depends on what you upload:
 | Origins only | The Origins game without sound: Origins keeps its audio outside these packs |
 | Earlier release only | Sonic 1 and 2: that release. Sonic CD (2011): not playable alone, since its scripts are PC bytecode the engine doesn't run; it only adds sound to the Origins game |
 
+- **Save slots.** Starting Sonic 1 or 2 opens a save screen: play without saving, or
+  pick one of four slots to continue (zone, character, lives and emeralds are shown),
+  start a new game, or delete it (press OK twice). New games then choose the character:
+  Sonic, Tails, Knuckles, Sonic & Tails, and with the Origins packs Knuckles & Tails,
+  Amy and Amy & Tails. The games save their own progress as you play (at the end of
+  each act), as the 2013 releases did. The 2013 packs' title screen cannot start a game
+  by itself (those releases used native menus), so for them the save screen opens when
+  the title would start its demo. Sonic CD goes to its own 2011 menu instead: its save
+  slots, Time Attack and extras.
 - **Storage.** The page offers each USB drive and the TV; a USB drive is chosen first, to
   spare the TV's space. Packs go in a `SonicWebMania/retro` folder on the drive (the page can
   create it), named `<game>-origins.rsdk` and `<game>-classic.rsdk` (`sonic1`, `sonic2`,
@@ -114,6 +124,8 @@ How each game plays depends on what you upload:
   - absolute paths for packs on USB drives;
   - the 2013 packs' (RSDKvB) encryption keys;
   - Ogg sound effects, which the 2013 packs use and the engine could only read as `.wav`.
+  `patches/rsdk/0003-retro-save-screen-hook.patch` calls the port when a legacy stage
+  loads, for the save screen.
 
 ## Disk space
 
@@ -196,11 +208,13 @@ Escape opens the port menu on a keyboard.
 
 ```
 src/main.cpp                launcher: storage, transfer server, setup screen, picks the game, then the engine
+src/RetroSaves.cpp          retro save slots: reads/writes the games' save memory, runs the save screen
 src/port/
   WebOSPortHooks.h          the C interface the engine calls (5 functions)
   PortRuntime.*             implements the hooks: Back menu (achievements, button test,
                             retro games), notifications, Plus opt-in
   RetroGames.*              Sonic 1, 2 and CD: finds their packs, plans Origins + classic, per-game folders
+  SaveSelect.h              what the retro games' save screen shows and returns
   RsdkPack.*                looks inside packs; converts Sonic CD's 2011 pack
   Md5.*                     MD5 for pack file names
   UsbDrives.*               mounted USB drives (from /proc/mounts)
@@ -214,7 +228,7 @@ src/port/
   BitmapFont.* TextRenderer.cpp   built-in 8x8 font, so text works before any game data exists
 web/index.html              the transfer page, embedded into the binary at build time
 patches/rsdk/               engine patches, applied by scripts/apply-patches.sh: 0001 hook call sites in the
-                            SDL2 device + the Plus gate; 0002 retro games (see Retro games)
+                            SDL2 device + the Plus gate; 0002 retro games; 0003 save screen hook (see Retro games)
 tools/                      rsdk_table.py (compare pack contents), rsdk_v3_convert.py (Sonic CD 2011 pack)
 cmake/WriteManifest.cmake       Homebrew Channel manifest for each release
 scripts/make-icon.py        draws the app icon (original pixel art)

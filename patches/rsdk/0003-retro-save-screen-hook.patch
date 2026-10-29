@@ -1,0 +1,38 @@
+diff --git a/RSDKv5/RSDK/Scene/Legacy/v3/SceneLegacyv3.cpp b/RSDKv5/RSDK/Scene/Legacy/v3/SceneLegacyv3.cpp
+index 2f80cb7..f314e1a 100644
+--- a/RSDKv5/RSDK/Scene/Legacy/v3/SceneLegacyv3.cpp
++++ b/RSDKv5/RSDK/Scene/Legacy/v3/SceneLegacyv3.cpp
+@@ -1,3 +1,5 @@
++// webOS port: save screen hook (see src/port/WebOSPortHooks.h)
++#include "WebOSPortHooks.h"
+ 
+ int32 RSDK::Legacy::v3::yScrollA    = 0;
+ int32 RSDK::Legacy::v3::yScrollB    = SCREEN_YSIZE;
+@@ -48,6 +50,8 @@ void RSDK::Legacy::v3::ProcessStage()
+ 
+     switch (stageMode) {
+         case STAGEMODE_LOAD: // Startup
++            // (webOS port) Save slots / the game's own menu when leaving the title screen.
++            WebOSPort_OnLegacyStageLoad(3);
+             fadeMode = 0;
+             SetActivePalette(0, 0, 256);
+             InitCameras();
+diff --git a/RSDKv5/RSDK/Scene/Legacy/v4/SceneLegacyv4.cpp b/RSDKv5/RSDK/Scene/Legacy/v4/SceneLegacyv4.cpp
+index 7db39c8..30c35d9 100644
+--- a/RSDKv5/RSDK/Scene/Legacy/v4/SceneLegacyv4.cpp
++++ b/RSDKv5/RSDK/Scene/Legacy/v4/SceneLegacyv4.cpp
+@@ -1,3 +1,5 @@
++// webOS port: save screen hook (see src/port/WebOSPortHooks.h)
++#include "WebOSPortHooks.h"
+ 
+ #if RETRO_USE_MOD_LOADER
+ namespace RSDK
+@@ -36,6 +38,8 @@ void RSDK::Legacy::v4::ProcessStage(void)
+ 
+     switch (stageMode) {
+         case STAGEMODE_LOAD: // Startup
++            // (webOS port) Save slots / the game's own menu when leaving the title screen.
++            WebOSPort_OnLegacyStageLoad(4);
+             SetActivePalette(0, 0, 256);
+             gameMenu[0].visibleRowOffset = 0;
+             gameMenu[1].visibleRowOffset = 0;

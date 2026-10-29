@@ -8,6 +8,8 @@
  *     address and the project page;
  *   - Retro games: Sonic Mania and the retro games whose packs are installed
  *     (see RetroGames.h); choosing one restarts the app into it;
+ * and the retro games' save screen (no save / four slots, then the
+ * character), opened by src/RetroSaves.cpp instead of by Back;
  *   - Achievements: the engine's achievement list, unlocked ones highlighted,
  *     with the selected one's description;
  *   - Button test: shows what each remote or controller press is and which
@@ -21,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <utility>
 
 namespace swm
@@ -209,13 +212,35 @@ void PortRuntime::FlushPendingReleases()
     pendingReleases_.erase(due, pendingReleases_.end());
 }
 
-void PortRuntime::RunMenu()
+void PortRuntime::RunMenu() { RunModal(Screen::Main); }
+
+SaveSelectResult PortRuntime::RunSaveSelect(const SaveSelectRequest &request)
+{
+    saveRequest_     = request;
+    saveResult_      = SaveSelectResult{};
+    saveRowSelected_ = 0;
+    // Start on the first slot in use, so continuing is one press.
+    for (int i = 0; i < kSaveSlotCount; ++i) {
+        if (saveRequest_.slots[static_cast<std::size_t>(i)].used) {
+            saveRowSelected_ = i + 1;
+            break;
+        }
+    }
+    std::printf("SonicWebMania: save screen open\n");
+    std::fflush(stdout);
+    RunModal(Screen::SaveSlots);
+    if (quitRequested_)
+        saveResult_.action = SaveSelectAction::Cancel;
+    return saveResult_;
+}
+
+void PortRuntime::RunModal(Screen first)
 {
     if (menuOpen_ || !redraw_)
         return;
 
     menuOpen_   = true;
-    screen_     = Screen::Main;
+    screen_     = first;
     selected_   = 0;
     lanAddress_ = FindLanAddress(); // The TV may have changed networks since launch.
     if (audioDevice_)
@@ -289,9 +314,13 @@ bool PortRuntime::HandleMenuEvent(const SDL_Event &event, bool *stickWasNeutral)
         HandleAchievementsAction(action);
         return false;
     }
-    if (screen_ == Screen::Games)
-        return HandleGamesAction(action);
-    return HandleMainAction(action);
+    switch (screen_) {
+        case Screen::Games: return HandleGamesAction(action);
+        case Screen::SaveSlots: return HandleSaveSlotsAction(action);
+        case Screen::SlotActions: return HandleSlotActionsAction(action);
+        case Screen::Characters: return HandleCharactersAction(action);
+        default: return HandleMainAction(action);
+    }
 }
 
 bool PortRuntime::HandleMainAction(MenuAction action)
@@ -398,6 +427,95 @@ bool PortRuntime::HandleGamesAction(MenuAction action)
     return false;
 }
 
+bool PortRuntime::FinishSaveSelect(SaveSelectAction action, int slot, int character)
+{
+    saveResult_.action    = action;
+    saveResult_.slot      = slot;
+    saveResult_.character = character;
+    menuOpen_             = false;
+    return true;
+}
+
+bool PortRuntime::HandleSaveSlotsAction(MenuAction action)
+{
+    const int rows = 1 + kSaveSlotCount;
+    switch (action) {
+        case MenuAction::Up: saveRowSelected_ = (saveRowSelected_ + rows - 1) % rows; return false;
+        case MenuAction::Down: saveRowSelected_ = (saveRowSelected_ + 1) % rows; return false;
+        case MenuAction::Cancel: return FinishSaveSelect(SaveSelectAction::Cancel, -1, 0);
+        case MenuAction::Confirm: {
+            pendingSlot_ = saveRowSelected_ - 1;
+            if (pendingSlot_ >= 0 && saveRequest_.slots[static_cast<std::size_t>(pendingSlot_)].used) {
+                slotActionSelected_ = 0;
+                deleteArmed_        = false;
+                screen_             = Screen::SlotActions;
+            }
+            else {
+                characterSelected_ = 0;
+                screen_            = Screen::Characters;
+            }
+            return false;
+        }
+        case MenuAction::None: return false;
+    }
+    return false;
+}
+
+bool PortRuntime::HandleSlotActionsAction(MenuAction action)
+{
+    constexpr int kCount = 3;
+    switch (action) {
+        case MenuAction::Up:
+            slotActionSelected_ = (slotActionSelected_ + kCount - 1) % kCount;
+            deleteArmed_        = false;
+            return false;
+        case MenuAction::Down:
+            slotActionSelected_ = (slotActionSelected_ + 1) % kCount;
+            deleteArmed_        = false;
+            return false;
+        case MenuAction::Cancel: screen_ = Screen::SaveSlots; return false;
+        case MenuAction::Confirm:
+            switch (static_cast<SlotAction>(slotActionSelected_)) {
+                case SlotAction::Continue: return FinishSaveSelect(SaveSelectAction::Continue, pendingSlot_, 0);
+                case SlotAction::Delete:
+                    if (!deleteArmed_) {
+                        deleteArmed_ = true; // Ask for a second press.
+                        return false;
+                    }
+                    saveRequest_.slots[static_cast<std::size_t>(pendingSlot_)] = RetroSaveSlot{};
+                    saveResult_.deleted.push_back(pendingSlot_);
+                    screen_ = Screen::SaveSlots;
+                    return false;
+                case SlotAction::Back: screen_ = Screen::SaveSlots; return false;
+            }
+            return false;
+        case MenuAction::None: return false;
+    }
+    return false;
+}
+
+bool PortRuntime::HandleCharactersAction(MenuAction action)
+{
+    const int count = static_cast<int>(saveRequest_.characters.size());
+    switch (action) {
+        case MenuAction::Up:
+            if (count > 0)
+                characterSelected_ = (characterSelected_ + count - 1) % count;
+            return false;
+        case MenuAction::Down:
+            if (count > 0)
+                characterSelected_ = (characterSelected_ + 1) % count;
+            return false;
+        case MenuAction::Cancel: screen_ = Screen::SaveSlots; return false;
+        case MenuAction::Confirm: {
+            const int character = count > 0 ? saveRequest_.characters[static_cast<std::size_t>(characterSelected_)].id : 0;
+            return FinishSaveSelect(pendingSlot_ < 0 ? SaveSelectAction::NoSave : SaveSelectAction::NewGame, pendingSlot_, character);
+        }
+        case MenuAction::None: return false;
+    }
+    return false;
+}
+
 void PortRuntime::HandleButtonTestEvent(const SDL_Event &event)
 {
     // Back, Exit or the pad's View/Guide leave the test; every other button is just shown.
@@ -471,6 +589,9 @@ void PortRuntime::DrawMenu(int width, int height, int scale) const
         case Screen::Achievements: DrawAchievementsPage(width, height, scale); break;
         case Screen::ButtonTest: DrawButtonTestPage(width, height, scale); break;
         case Screen::Games: DrawGamesPage(width, height, scale); break;
+        case Screen::SaveSlots: DrawSaveSlotsPage(width, height, scale); break;
+        case Screen::SlotActions: DrawSlotActionsPage(width, height, scale); break;
+        case Screen::Characters: DrawCharactersPage(width, height, scale); break;
     }
 }
 
@@ -650,6 +771,95 @@ void PortRuntime::DrawGamesPage(int width, int height, int scale) const
     }
 
     text_.DrawTextCentered(width / 2, panel.y + panel.h - pad - glyph, "OK: play   BACK: return", scale, kDim);
+}
+
+std::string PortRuntime::CharacterName(int id) const
+{
+    for (const RetroCharacter &character : saveRequest_.characters) {
+        if (character.id == id)
+            return character.name;
+    }
+    return "";
+}
+
+void PortRuntime::DrawListPage(int width, int height, int scale, const std::string &title, const std::vector<std::string> &rows,
+                               int selected, const std::string &note, const std::string &footer) const
+{
+    const int glyph    = BitmapFont::kGlyphSize * scale;
+    const int lineGap  = glyph + 5 * scale;
+    const int pad      = 8 * scale;
+    const int panelW   = std::min(width - 8 * scale, 52 * glyph);
+    const int maxChars = (panelW - 2 * pad) / glyph;
+    const int count    = static_cast<int>(rows.size());
+    const int panelH   = lineGap * (count + 6) + pad;
+    const SDL_Rect panel = DrawPanel(width, height, panelW, panelH, scale);
+
+    int y = panel.y + pad;
+    text_.DrawTextCentered(width / 2, y, title, scale, kHighlight);
+    y += lineGap * 3 / 2;
+
+    for (int i = 0; i < count; ++i) {
+        const bool isSelected = i == selected;
+        if (isSelected)
+            text_.FillRect(panel.x + 4 * scale, y - 2 * scale, panel.w - 8 * scale, glyph + 4 * scale, kSelection);
+        std::string row = rows[static_cast<std::size_t>(i)];
+        if (static_cast<int>(row.size()) > maxChars)
+            row = row.substr(0, static_cast<std::size_t>(maxChars - 1)) + ".";
+        text_.DrawTextCentered(width / 2, y, row, scale, isSelected ? kHighlight : kText);
+        y += lineGap;
+    }
+
+    y += lineGap / 2;
+    const std::vector<std::string> lines = WrapText(note, static_cast<std::size_t>(maxChars));
+    for (std::size_t i = 0; i < lines.size() && i < 2; ++i) {
+        text_.DrawTextCentered(width / 2, y, lines[i], scale, kDim);
+        y += lineGap;
+    }
+
+    text_.DrawTextCentered(width / 2, panel.y + panel.h - pad - glyph, footer, scale, kDim);
+}
+
+void PortRuntime::DrawSaveSlotsPage(int width, int height, int scale) const
+{
+    std::vector<std::string> rows = { "No save" };
+    for (int i = 0; i < kSaveSlotCount; ++i) {
+        const RetroSaveSlot &slot = saveRequest_.slots[static_cast<std::size_t>(i)];
+        const std::string label   = "Slot " + std::to_string(i + 1) + ": ";
+        rows.push_back(label + (slot.used ? slot.place : "New game"));
+    }
+
+    // Details of the selected slot.
+    std::string note = "Play without saving your progress.";
+    if (saveRowSelected_ > 0) {
+        const RetroSaveSlot &slot = saveRequest_.slots[static_cast<std::size_t>(saveRowSelected_ - 1)];
+        if (slot.used) {
+            note = CharacterName(slot.character) + ", " + std::to_string(slot.lives) + (slot.lives == 1 ? " life, " : " lives, ")
+                   + std::to_string(slot.emeralds) + (slot.emeralds == 1 ? " emerald" : " emeralds")
+                   + (slot.cleared ? ". Game cleared" : "");
+        }
+        else {
+            note = "Start a new game here; progress is saved as you play.";
+        }
+    }
+    DrawListPage(width, height, scale, saveRequest_.title.empty() ? "SAVE SELECT" : saveRequest_.title, rows, saveRowSelected_,
+                 note, "OK: choose   BACK: title screen");
+}
+
+void PortRuntime::DrawSlotActionsPage(int width, int height, int scale) const
+{
+    const RetroSaveSlot &slot = saveRequest_.slots[static_cast<std::size_t>(std::max(0, pendingSlot_))];
+    const std::vector<std::string> rows = { "Continue", deleteArmed_ ? "Press OK again to delete" : "Delete", "Back" };
+    DrawListPage(width, height, scale, "SLOT " + std::to_string(pendingSlot_ + 1), rows, slotActionSelected_, slot.place,
+                 "OK: choose   BACK: return");
+}
+
+void PortRuntime::DrawCharactersPage(int width, int height, int scale) const
+{
+    std::vector<std::string> rows;
+    for (const RetroCharacter &character : saveRequest_.characters)
+        rows.push_back(character.name);
+    const std::string note = pendingSlot_ < 0 ? "Without saving" : "New game in slot " + std::to_string(pendingSlot_ + 1);
+    DrawListPage(width, height, scale, "CHOOSE A CHARACTER", rows, characterSelected_, note, "OK: start   BACK: return");
 }
 
 void PortRuntime::DrawToast(int width, int height, int scale)
