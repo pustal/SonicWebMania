@@ -23,7 +23,7 @@ BG_EDGE = (10, 18, 48)
 # ribbon fits on the ground under the loop and a band of checkered ground
 # still shows beneath it.
 GROUND = 0.58      # Where the hill's grass starts (it waves a little around this).
-LOOP_Y = 0.35      # Centre of the loop.
+LOOP_Y = 0.385     # Centre of the loop: its inner green lip meets the grass, so it reads as a loop.
 RIBBON_TOP = 0.635 # Top of the name ribbon, just under the loop.
 
 def pixel(u, v):
@@ -94,16 +94,24 @@ FONT = load_font()
 
 
 def text_mask(text, scale, bold):
-    """Set of (x, y) pixels of @text at @scale (bold: each glyph pixel also one to the right)."""
+    """
+    Set of (x, y) pixels of @text at @scale (bold: each glyph pixel also one to
+    the right). Letters are spaced by their drawn width, not the font's fixed
+    8-pixel cell, so narrow letters (I) and wide ones (M) get the same gap.
+    """
     pixels = set()
-    advance = 8 * scale
-    for i, ch in enumerate(text):
+    gap = scale  # One font pixel between letters.
+    pen = 0
+    for ch in text:
+        columns = [gx for bits in FONT[ch] for gx in range(8) if bits >> gx & 1]
+        first, last = min(columns), max(columns)
         for gy, bits in enumerate(FONT[ch]):
-            for gx in range(8):
+            for gx in range(first, last + 1):
                 if bits >> gx & 1:
                     for sy in range(scale):
                         for sx in range(scale + (1 if bold else 0)):
-                            pixels.add((i * advance + gx * scale + sx, gy * scale + sy))
+                            pixels.add((pen + (gx - first) * scale + sx, gy * scale + sy))
+        pen += (last - first + 1) * scale + (1 if bold else 0) + gap
     return pixels
 
 
