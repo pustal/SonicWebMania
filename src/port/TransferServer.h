@@ -1,7 +1,8 @@
 /**
  * @file TransferServer.h
  * @brief A small HTTP server that lets a phone or computer on the same network
- *        upload the game data and download/upload save files.
+ *        upload the game data and download/upload save files, and manage
+ *        the retro games' data packs (on the TV or a USB drive).
  *
  * Design notes for a TV:
  *  - Uploads are streamed straight to disk (never held in memory).
@@ -30,10 +31,11 @@ namespace swm
 
 class Storage;
 class PortConfig;
+class RetroLibrary;
 
 /** Snapshot of what the server is doing, for the TV screens to display. */
 struct TransferStatus {
-    bool uploading                 = false; ///< A Data.rsdk upload is in progress.
+    bool uploading                 = false; ///< A Data.rsdk or retro pack upload is in progress.
     std::uint64_t receivedBytes    = 0;     ///< Bytes of the current/last upload written so far.
     std::uint64_t expectedBytes    = 0;     ///< Announced size of the current/last upload.
     bool dataPackReady             = false; ///< A valid Data.rsdk was installed (setup mode).
@@ -55,7 +57,7 @@ public:
      */
     static constexpr std::uint16_t kPreferredPort = 47801;
 
-    TransferServer(Storage &storage, PortConfig &config, std::string pin);
+    TransferServer(Storage &storage, PortConfig &config, const RetroLibrary &retro, std::string pin);
     ~TransferServer();
 
     TransferServer(const TransferServer &)            = delete;
@@ -87,11 +89,18 @@ public:
 private:
     void RegisterRoutes();
 
+    /** The /api/retro routes (see TransferServer.cpp). */
+    void RegisterRetroRoutes();
+
+    /** Marks that something changed which applies at the next launch (only while a game runs). */
+    void NoteRestartNeeded();
+
     /** Records a status event shown on the TV. */
     void PublishEvent(const std::string &message);
 
     Storage &storage_;
     PortConfig &config_;
+    const RetroLibrary &retro_;
     const std::string pin_;
 
     std::unique_ptr<httplib::Server> server_;

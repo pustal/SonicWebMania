@@ -9,14 +9,22 @@
  *   GET  /api/files           JSON list of saves/settings files
  *   GET  /api/files/:name     download one file
  *   PUT  /api/files/:name     raw body = replacement file (applied at next launch while playing)
- *   PUT  /api/settings?plusEnabled=0|1
+ *   PUT  /api/settings?plusEnabled=0|1&retroEnabled=0|1   (either or both)
+ *   GET  /api/retro           JSON: retro mode, TV and USB space, each game's packs
+ *   PUT  /api/retro/:game/:edition?dest=tv|usb[&mount=<USB mount point>]
+ *                             raw body = a retro game's pack (edition: origins|classic)
+ *   DELETE /api/retro/:game/:edition   removes that pack wherever it is
+ *   POST /api/retro/usb-folder?mount=<USB mount point>   creates SonicWebMania/retro on the drive
  */
 #include "TransferServer.h"
 
 #include "NetInfo.h"
 #include "PortInfo.h"
 #include "PortConfig.h"
+#include "RetroGames.h"
+#include "RsdkPack.h"
 #include "Storage.h"
+#include "UsbDrives.h"
 #include "WebPage.generated.h"
 
 // Keep the server light: two workers are plenty for one person with a phone.
@@ -30,8 +38,9 @@
 #include <limits>
 #include <random>
 #include <sstream>
-#include <system_error>
 #include <filesystem>
+#include <system_error>
+#include <vector>
 
 namespace swm
 {
@@ -43,6 +52,10 @@ constexpr const char *kTextType   = "text/plain; charset=utf-8";
 constexpr const char *kPinHeader  = "X-Pin";
 constexpr int kPortAttempts       = 10;
 constexpr std::uint64_t kMinimumPackBytes = 64; // Header plus a file table; anything smaller is not a pack.
+/** Space kept free on a USB drive on top of a pack (the TV keeps Storage::kSafetyMarginBytes). */
+constexpr std::uint64_t kUsbSafetyMarginBytes = 8ull * 1024ull * 1024ull;
+/** Largest retro pack accepted (the biggest known, Sonic CD's, is far below this). */
+constexpr std::uint64_t kMaxRetroPackBytes = 1024ull * 1024ull * 1024ull;
 
 /** Escapes @p text for use inside a JSON string literal. */
 std::string JsonEscape(const std::string &text)
@@ -161,8 +174,8 @@ std::string GeneratePin()
     return buffer;
 }
 
-TransferServer::TransferServer(Storage &storage, PortConfig &config, std::string pin)
-    : storage_(storage), config_(config), pin_(std::move(pin))
+TransferServer::TransferServer(Storage &storage, PortConfig &config, const RetroLibrary &retro, std::string pin)
+    : storage_(storage), config_(config), retro_(retro), pin_(std::move(pin))
 {
 }
 
@@ -218,6 +231,12 @@ void TransferServer::PublishEvent(const std::string &message)
     ++status_.eventSerial;
 }
 
+void TransferServer::NoteRestartNeeded()
+{
+    std::lock_guard<std::mutex> lock(statusMutex_);
+    status_.restartPending = status_.restartPending || !setupMode_.load();
+}
+
 void TransferServer::RegisterRoutes()
 {
     httplib::Server &server = *server_;
@@ -255,6 +274,7 @@ void TransferServer::RegisterRoutes()
              << ",\"dataPack\":{\"present\":" << (packValid ? "true" : "false")
              << ",\"size\":" << (packValid ? Storage::FileSize(packPath) : 0) << "}"
              << ",\"plusEnabled\":" << (config_.IsPlusEnabled() ? "true" : "false")
+             << ",\"retroEnabled\":" << (config_.IsRetroEnabled() ? "true" : "false")
              << ",\"restartPending\":" << (status.restartPending ? "true" : "false")
              << ",\"upload\":{\"active\":" << (status.uploading ? "true" : "false")
              << ",\"received\":" << status.receivedBytes << ",\"expected\":" << status.expectedBytes << "}}";
@@ -403,19 +423,274 @@ void TransferServer::RegisterRoutes()
     });
 
     server.Put("/api/settings", [this](const httplib::Request &req, httplib::Response &res) {
-        if (!req.has_param("plusEnabled"))
+        if (!req.has_param("plusEnabled") && !req.has_param("retroEnabled"))
             return Fail(res, 400, "Nothing to change.");
 
-        const bool enabled = req.get_param_value("plusEnabled") == "1";
-        if (!config_.SetPlusEnabled(enabled))
-            return Fail(res, 500, "Could not save the setting.");
+        std::string message;
+        if (req.has_param("plusEnabled")) {
+            const bool enabled = req.get_param_value("plusEnabled") == "1";
+            if (!config_.SetPlusEnabled(enabled))
+                return Fail(res, 500, "Could not save the setting.");
+            message = enabled ? "Plus content enabled. Restart to apply." : "Plus content disabled. Restart to apply.";
+        }
+        if (req.has_param("retroEnabled")) {
+            const bool enabled = req.get_param_value("retroEnabled") == "1";
+            if (!config_.SetRetroEnabled(enabled))
+                return Fail(res, 500, "Could not save the setting.");
+            message = enabled ? "Retro games enabled. Restart to apply." : "Retro games disabled. Restart to apply.";
+        }
+
+        NoteRestartNeeded();
+        PublishEvent(message);
+        res.set_content("saved", kTextType);
+    });
+
+    RegisterRetroRoutes();
+}
+
+namespace
+{
+
+/** JSON for one pack slot of a retro game. */
+std::string PackJson(const RetroPack &pack)
+{
+    std::ostringstream json;
+    json << "{\"state\":\"" << PackStateName(pack.state) << "\"";
+    if (pack.state != PackState::Missing) {
+        json << ",\"location\":\"" << (pack.onUsb ? "usb" : "tv") << "\",\"path\":\"" << JsonEscape(pack.path)
+             << "\",\"size\":" << pack.size;
+        if (pack.version)
+            json << ",\"version\":\"" << pack.version << "\"";
+        json << ",\"standalone\":" << (pack.standalone ? "true" : "false");
+    }
+    json << "}";
+    return json.str();
+}
+
+/** Parses the :edition path part. @return False for anything but "origins" or "classic". */
+bool ParseEdition(const std::string &text, RetroEdition *edition)
+{
+    if (text == "origins")
+        *edition = RetroEdition::Origins;
+    else if (text == "classic")
+        *edition = RetroEdition::Classic;
+    else
+        return false;
+    return true;
+}
+
+/** "Sonic CD (Origins)" for messages. */
+std::string PackLabel(const RetroGameInfo &game, RetroEdition edition)
+{
+    return std::string(game.title) + (edition == RetroEdition::Origins ? " (Origins)" : " (classic)");
+}
+
+/** Every folder a retro pack may be in: the TV's, then each USB drive's. */
+std::vector<std::string> AllPackFolders(const RetroLibrary &retro)
+{
+    std::vector<std::string> folders = { retro.TvPackFolder() };
+    for (const UsbDrive &drive : ListUsbDrives())
+        folders.push_back(RetroLibrary::UsbPackFolder(drive.mountPoint));
+    return folders;
+}
+
+} // namespace
+
+void TransferServer::RegisterRetroRoutes()
+{
+    httplib::Server &server = *server_;
+
+    server.Get("/api/retro", [this](const httplib::Request &, httplib::Response &res) {
+        std::ostringstream json;
+        json << "{\"enabled\":" << (config_.IsRetroEnabled() ? "true" : "false") << ",\"tv\":{\"folder\":\""
+             << JsonEscape(retro_.TvPackFolder()) << "\",\"freeBytes\":" << storage_.FreeBytes()
+             << ",\"safetyMarginBytes\":" << Storage::kSafetyMarginBytes << "},\"drives\":[";
+        bool first = true;
+        for (const UsbDrive &drive : ListUsbDrives()) {
+            std::error_code ec;
+            const std::string folder = RetroLibrary::UsbPackFolder(drive.mountPoint);
+            json << (first ? "" : ",") << "{\"mount\":\"" << JsonEscape(drive.mountPoint) << "\",\"name\":\""
+                 << JsonEscape(drive.name) << "\",\"fileSystem\":\"" << JsonEscape(drive.fileSystem)
+                 << "\",\"freeBytes\":" << drive.freeBytes << ",\"totalBytes\":" << drive.totalBytes
+                 << ",\"writable\":" << (drive.writable ? "true" : "false")
+                 << ",\"hasFolder\":" << (std::filesystem::is_directory(folder, ec) ? "true" : "false") << ",\"folder\":\""
+                 << JsonEscape(folder) << "\"}";
+            first = false;
+        }
+        json << "],\"games\":[";
+        first = true;
+        for (const RetroGame &game : retro_.Scan()) {
+            json << (first ? "" : ",") << "{\"id\":\"" << game.info.id << "\",\"title\":\"" << JsonEscape(game.info.title)
+                 << "\",\"playable\":" << (game.Playable() ? "true" : "false")
+                 << ",\"sound\":" << (game.HasSound() ? "true" : "false") << ",\"mode\":\""
+                 << JsonEscape(game.ModeDescription()) << "\",\"origins\":" << PackJson(game.origins)
+                 << ",\"classic\":" << PackJson(game.classic) << "}";
+            first = false;
+        }
+        json << "]}";
+        res.set_content(json.str(), kJsonType);
+    });
+
+    server.Post("/api/retro/usb-folder", [](const httplib::Request &req, httplib::Response &res) {
+        UsbDrive drive;
+        if (!FindUsbDrive(req.get_param_value("mount"), &drive))
+            return Fail(res, 404, "That USB drive is not connected.");
+        if (!drive.writable)
+            return Fail(res, 403, "That USB drive is read-only.");
+
+        std::error_code ec;
+        const std::string folder = RetroLibrary::UsbPackFolder(drive.mountPoint);
+        std::filesystem::create_directories(folder, ec);
+        if (ec)
+            return Fail(res, 500, "Could not create " + folder + ": " + ec.message());
+        res.set_content("created", kTextType);
+    });
+
+    server.Put("/api/retro/:game/:edition",
+               [this](const httplib::Request &req, httplib::Response &res, const httplib::ContentReader &reader) {
+        const RetroGameInfo *game = RetroLibrary::FindGame(req.path_params.at("game"));
+        RetroEdition edition      = RetroEdition::Origins;
+        if (!game || !ParseEdition(req.path_params.at("edition"), &edition))
+            return Fail(res, 404, "Unknown game or edition.");
+
+        std::uint64_t expected = 0;
+        if (!ContentLength(req, &expected) || expected < kMinimumPackBytes)
+            return Fail(res, 411, "The upload must state its size (Content-Length).");
+        if (expected > kMaxRetroPackBytes)
+            return Fail(res, 413, "No retro game pack is this big; refusing " + HumanBytes(expected) + ".");
+
+        // Where it goes: the TV's data folder, or a USB drive's SonicWebMania/retro folder.
+        std::string folder;
+        std::uint64_t free = 0, margin = 0;
+        if (req.get_param_value("dest") == "usb") {
+            UsbDrive drive;
+            if (!FindUsbDrive(req.get_param_value("mount"), &drive))
+                return Fail(res, 404, "That USB drive is not connected.");
+            if (!drive.writable)
+                return Fail(res, 403, "That USB drive is read-only.");
+            folder = RetroLibrary::UsbPackFolder(drive.mountPoint);
+            free   = drive.freeBytes;
+            margin = kUsbSafetyMarginBytes;
+        }
+        else {
+            folder = retro_.TvPackFolder();
+            free   = storage_.FreeBytes();
+            margin = Storage::kSafetyMarginBytes;
+        }
+        if (expected + margin > free) {
+            return Fail(res, 507,
+                        "Not enough space: this file needs " + HumanBytes(expected + margin) + " (including a safety margin), "
+                            + HumanBytes(free) + " is free.");
+        }
+
+        std::error_code ec;
+        std::filesystem::create_directories(folder, ec);
+        if (ec)
+            return Fail(res, 500, "Could not create " + folder + ": " + ec.message());
+
+        if (uploadInProgress_.exchange(true))
+            return Fail(res, 409, "Another upload is already running.");
+        const std::unique_ptr<std::atomic<bool>, void (*)(std::atomic<bool> *)> uploadGuard(
+            &uploadInProgress_, [](std::atomic<bool> *flag) { flag->store(false); });
 
         {
             std::lock_guard<std::mutex> lock(statusMutex_);
-            status_.restartPending = status_.restartPending || !setupMode_.load();
+            status_.uploading     = true;
+            status_.receivedBytes = 0;
+            status_.expectedBytes = expected;
         }
-        PublishEvent(enabled ? "Plus content enabled. Restart to apply." : "Plus content disabled. Restart to apply.");
-        res.set_content("saved", kTextType);
+        const std::string label = PackLabel(*game, edition);
+        PublishEvent("Receiving " + label + "...");
+
+        const std::string fileName = RetroLibrary::PackFileName(game->id, edition);
+        const std::string partPath = folder + "/" + fileName + ".part";
+        const std::int64_t written = StreamBodyToFile(reader, partPath, expected, [this](std::uint64_t total) {
+            std::lock_guard<std::mutex> lock(statusMutex_);
+            status_.receivedBytes = total;
+        });
+        {
+            std::lock_guard<std::mutex> lock(statusMutex_);
+            status_.uploading = false;
+        }
+
+        if (written < 0 || static_cast<std::uint64_t>(written) != expected) {
+            std::filesystem::remove(partPath, ec);
+            PublishEvent("Upload interrupted. Please try again.");
+            return Fail(res, 400, "The upload was interrupted or could not be written.");
+        }
+
+        char version    = 0;
+        PackState state = RetroLibrary::Inspect(partPath, &version);
+        std::string readyPath = partPath; // The file to install.
+        if (state == PackState::Unsupported) {
+            // Sonic CD's 2011 format: rewrite it as a pack the engine opens.
+            // The converted copy is written next to the upload before the upload is removed.
+            std::uint64_t freeAfter = 0;
+            {
+                UsbDrive drive;
+                freeAfter = req.get_param_value("dest") == "usb" && FindUsbDrive(req.get_param_value("mount"), &drive)
+                                ? drive.freeBytes
+                                : storage_.FreeBytes();
+            }
+            if (expected + margin > freeAfter) {
+                std::filesystem::remove(partPath, ec);
+                return Fail(res, 507, "Not enough space to convert this pack: it needs another " + HumanBytes(expected + margin) + ".");
+            }
+            PublishEvent("Converting " + label + "...");
+            const std::string convertedPath = folder + "/" + fileName + ".conv";
+            std::string error;
+            const bool converted = RsdkPack::ConvertOldV3Pack(partPath, convertedPath, &error);
+            std::filesystem::remove(partPath, ec);
+            if (!converted) {
+                PublishEvent("Could not convert " + label + ".");
+                return Fail(res, 415, "Could not convert this Sonic CD pack: " + error + ".");
+            }
+            readyPath = convertedPath;
+            state     = RetroLibrary::Inspect(readyPath, &version);
+        }
+        if (state != PackState::Ready) {
+            std::filesystem::remove(readyPath, ec);
+            PublishEvent("That file is not a " + label + " pack.");
+            return Fail(res, 415, "That file is not an RSDKv3/v4 data pack (a Sonic Mania Data.rsdk belongs above).");
+        }
+
+        const std::string destination = folder + "/" + fileName;
+        std::filesystem::rename(readyPath, destination, ec);
+        if (ec) {
+            std::filesystem::remove(readyPath, ec);
+            return Fail(res, 500, "Could not move the file into place.");
+        }
+
+        // One copy only: the TV's folder is searched first, so an older copy there would win.
+        for (const std::string &other : AllPackFolders(retro_)) {
+            if (other != folder)
+                std::filesystem::remove(other + "/" + fileName, ec);
+        }
+
+        NoteRestartNeeded();
+        PublishEvent(label + " installed.");
+        res.set_content("installed", kTextType);
+    });
+
+    server.Delete("/api/retro/:game/:edition", [this](const httplib::Request &req, httplib::Response &res) {
+        const RetroGameInfo *game = RetroLibrary::FindGame(req.path_params.at("game"));
+        RetroEdition edition      = RetroEdition::Origins;
+        if (!game || !ParseEdition(req.path_params.at("edition"), &edition))
+            return Fail(res, 404, "Unknown game or edition.");
+
+        const std::string fileName = RetroLibrary::PackFileName(game->id, edition);
+        int removed                = 0;
+        for (const std::string &folder : AllPackFolders(retro_)) {
+            std::error_code ec;
+            if (std::filesystem::remove(folder + "/" + fileName, ec))
+                ++removed;
+        }
+        if (removed == 0)
+            return Fail(res, 404, "That pack is not installed.");
+
+        NoteRestartNeeded();
+        PublishEvent(PackLabel(*game, edition) + " removed.");
+        res.set_content("removed", kTextType);
     });
 }
 

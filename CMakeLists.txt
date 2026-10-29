@@ -8,7 +8,7 @@
 # See README.md for the full walkthrough.
 
 cmake_minimum_required(VERSION 3.21)
-project(SonicWebMania VERSION 1.0.1 LANGUAGES C CXX)
+project(SonicWebMania VERSION 1.1.0 LANGUAGES C CXX)
 
 set(SWM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${SWM_ROOT}/cmake")
@@ -118,15 +118,19 @@ add_custom_command(
 
 add_library(swm_port STATIC
     src/port/BitmapFont.cpp
+    src/port/Md5.cpp
     src/port/Achievements.h
     src/port/NetInfo.cpp
     src/port/PortConfig.cpp
     src/port/PortRuntime.cpp
     src/port/RemoteInput.cpp
+    src/port/RetroGames.cpp
+    src/port/RsdkPack.cpp
     src/port/SetupScreen.cpp
     src/port/Storage.cpp
     src/port/TextRenderer.cpp
     src/port/TransferServer.cpp
+    src/port/UsbDrives.cpp
     "${SWM_GENERATED_DIR}/WebPage.generated.h"
 )
 target_compile_features(swm_port PUBLIC cxx_std_17)

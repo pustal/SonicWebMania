@@ -33,13 +33,37 @@ public:
     /** Stores the Plus opt-in. @return False if port.ini could not be written. */
     bool SetPlusEnabled(bool enabled);
 
+    /**
+     * Whether the retro games (Sonic 1, 2 and CD from the player's own packs,
+     * see RetroGames.h) are offered in the Back menu. Off by default.
+     */
+    bool IsRetroEnabled() const;
+
+    /** Stores the retro opt-in. @return False if port.ini could not be written. */
+    bool SetRetroEnabled(bool enabled);
+
+    /**
+     * The game to start when the app is opened: the id of the last game that
+     * was left normally ("mania", "sonic1", ...), or "" for the default.
+     *
+     * main() clears it while a game runs and sets it again when the game is
+     * left normally, so a game that crashes on start is not started again on
+     * the next launch.
+     */
+    std::string LastGame() const;
+
+    /** Stores the game to start next time ("" for the default). @return False if port.ini could not be written. */
+    bool SetLastGame(const std::string &id);
+
 private:
     /** Writes the current values to disk. Caller holds mutex_. */
     bool SaveLocked() const;
 
     std::string path_;
     mutable std::mutex mutex_;
-    bool plusEnabled_ = false;
+    bool plusEnabled_  = false;
+    bool retroEnabled_ = false;
+    std::string lastGame_;
 };
 
 } // namespace swm

@@ -58,7 +58,8 @@ struct ScreenState {
     std::string address;
     std::uint64_t freeBytes = 0;
     TransferStatus transfer;
-    bool starting = false;
+    bool starting       = false;
+    bool otherGameReady = false; ///< A retro game became playable.
 };
 
 void DrawScreen(SDL_Renderer *renderer, const TextRenderer &text, const ScreenState &state, const Storage &storage,
@@ -74,7 +75,8 @@ void DrawScreen(SDL_Renderer *renderer, const TextRenderer &text, const ScreenSt
     y += 28;
 
     if (state.starting) {
-        text.DrawTextCentered(center, kCanvasHeight / 2, "Game data installed. Starting...", 1, kText);
+        text.DrawTextCentered(center, kCanvasHeight / 2,
+                              state.otherGameReady ? "Retro game installed. Starting..." : "Game data installed. Starting...", 1, kText);
         SDL_RenderPresent(renderer);
         return;
     }
@@ -82,6 +84,8 @@ void DrawScreen(SDL_Renderer *renderer, const TextRenderer &text, const ScreenSt
     text.DrawTextCentered(center, y, "The game data file (Data.rsdk) is needed.", 1, kText);
     y += kLineHeight;
     text.DrawTextCentered(center, y, "Use the one from your own copy of Sonic Mania.", 1, kDim);
+    y += kLineHeight;
+    text.DrawTextCentered(center, y, "(Or add Sonic 1, 2 or CD under Retro games on the page.)", 1, kDim);
     y += kLineHeight * 2;
 
     if (!server || server->Port() == 0) {
@@ -136,7 +140,7 @@ void DrawScreen(SDL_Renderer *renderer, const TextRenderer &text, const ScreenSt
 
 } // namespace
 
-SetupResult RunSetupScreen(const Storage &storage, const TransferServer *server)
+SetupResult RunSetupScreen(const Storage &storage, const TransferServer *server, const std::function<bool()> &otherGameReady)
 {
     if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0)
         return SetupResult::Failed;
@@ -187,11 +191,14 @@ SetupResult RunSetupScreen(const Storage &storage, const TransferServer *server)
             state.address      = FindLanAddress();
             state.freeBytes    = storage.FreeBytes();
             nextAddressRefresh = now + kAddressRefreshMs;
+            // Scanning touches the USB drives, so only as often as the address.
+            if (!state.starting && otherGameReady)
+                state.otherGameReady = otherGameReady();
         }
         if (server)
             state.transfer = server->Snapshot();
 
-        if (!state.starting && (state.transfer.dataPackReady || storage.HasValidDataPack())) {
+        if (!state.starting && (state.transfer.dataPackReady || storage.HasValidDataPack() || state.otherGameReady)) {
             state.starting = true;
             startAt        = now + kStartDelayMs;
         }

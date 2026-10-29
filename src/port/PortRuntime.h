@@ -25,6 +25,13 @@ namespace swm
 
 class TransferServer;
 
+/** A game the Back menu's "Retro games" page can switch to. */
+struct GameChoice {
+    std::string id;    ///< "mania", "sonic1", ... (passed back to main() as the next game).
+    std::string title; ///< Name shown in the list.
+    std::string note;  ///< How it will play, shown under the selected entry (may be empty).
+};
+
 class PortRuntime
 {
 public:
@@ -41,8 +48,17 @@ public:
      */
     void Configure(const TransferServer *server, std::string lanAddress, bool plusEnabled, AchievementProvider achievements);
 
-    /** @return True once "Restart" was chosen; main() relaunches the app after the engine exits. */
+    /**
+     * Lists the games the player can switch to and which one is running. With
+     * fewer than two games the menu has no "Retro games" entry.
+     */
+    void SetGames(std::vector<GameChoice> games, std::string currentId);
+
+    /** @return True once "Restart" or another game was chosen; main() relaunches the app after the engine exits. */
     bool RestartRequested() const { return restartRequested_; }
+
+    /** The game to relaunch into: the one chosen on the "Retro games" page, else the running one. */
+    const std::string &NextGame() const { return nextGame_.empty() ? currentGame_ : nextGame_; }
 
     // ---- Engine hooks (see WebOSPortHooks.h) ----
 
@@ -53,11 +69,11 @@ public:
     bool IsPlusEnabled() const { return plusEnabled_; }
 
 private:
-    /** Main menu entries, in display order. */
-    enum class MenuItem { Resume, Achievements, ButtonTest, Restart, Close, Count };
+    /** Main menu entries; menuItems_ holds the ones shown, in display order. */
+    enum class MenuItem { Resume, Achievements, ButtonTest, Games, Restart, Close };
 
     /** Which page of the menu is showing. */
-    enum class Screen { Main, Achievements, ButtonTest };
+    enum class Screen { Main, Achievements, ButtonTest, Games };
 
     /** A remote key release held back so the game sees the press for at least one frame. */
     struct PendingRelease {
@@ -79,6 +95,9 @@ private:
     /** Applies a navigation action on the achievement list. */
     void HandleAchievementsAction(MenuAction action);
 
+    /** Applies a navigation action on the game list. @return True when the menu should close. */
+    bool HandleGamesAction(MenuAction action);
+
     /** Records a press on the button test page. Back/Exit/Guide return to the main page. */
     void HandleButtonTestEvent(const SDL_Event &event);
 
@@ -98,6 +117,13 @@ private:
     void DrawMainPage(int width, int height, int scale) const;
     void DrawAchievementsPage(int width, int height, int scale) const;
     void DrawButtonTestPage(int width, int height, int scale) const;
+    void DrawGamesPage(int width, int height, int scale) const;
+
+    /** Text of a main menu entry. */
+    static const char *Label(MenuItem item);
+
+    /** Rebuilds menuItems_ from the current game list. */
+    void RebuildMenu();
     void DrawToast(int width, int height, int scale);
 
     /** "http://192.168.1.20:47801  PIN 1234", or a hint when the server is unavailable. */
@@ -112,6 +138,13 @@ private:
     SDL_AudioDeviceID audioDevice_ = 0;
     WebOSPortRedrawFn redraw_      = nullptr;
     TextRenderer text_;
+
+    std::vector<MenuItem> menuItems_ = { MenuItem::Resume, MenuItem::Achievements, MenuItem::ButtonTest,
+                                         MenuItem::Restart, MenuItem::Close };
+    std::vector<GameChoice> games_;
+    std::string currentGame_;
+    std::string nextGame_;
+    int gameSelected_ = 0;
 
     bool menuOpen_         = false;
     Screen screen_         = Screen::Main;

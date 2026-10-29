@@ -2,9 +2,12 @@
  * @file PortRuntime.cpp
  * @brief Implementation of the in-game menu, notifications and engine hooks.
  *
- * The menu has three pages:
- *   - Main: Resume, Achievements, Button test, Restart game, Close app, plus
- *     the transfer address and the project page;
+ * The menu has four pages:
+ *   - Main: Resume, Achievements, Button test, Retro games (when there is more
+ *     than one game to play), Restart game, Close app, plus the transfer
+ *     address and the project page;
+ *   - Retro games: Sonic Mania and the retro games whose packs are installed
+ *     (see RetroGames.h); choosing one restarts the app into it;
  *   - Achievements: the engine's achievement list, unlocked ones highlighted,
  *     with the selected one's description;
  *   - Button test: shows what each remote or controller press is and which
@@ -18,6 +21,7 @@
 
 #include <algorithm>
 #include <array>
+#include <utility>
 
 namespace swm
 {
@@ -53,7 +57,6 @@ constexpr Color kLink      = { 90, 170, 255, 255 };
 constexpr Color kUnlocked  = { 90, 200, 120, 255 };
 constexpr Color kDimmer    = { 0, 0, 0, 140 };
 
-constexpr std::array<const char *, 5> kMenuLabels = { "Resume", "Achievements", "Button test", "Restart game", "Close app" };
 
 /** True for events the engine must still receive after the menu closes. */
 bool MustForwardAfterMenu(const SDL_Event &event)
@@ -108,6 +111,36 @@ void PortRuntime::Configure(const TransferServer *server, std::string lanAddress
     achievementProvider_ = achievements;
     if (server_)
         seenEventSerial_ = server_->Snapshot().eventSerial; // Do not replay setup-time events in game.
+}
+
+void PortRuntime::SetGames(std::vector<GameChoice> games, std::string currentId)
+{
+    games_       = std::move(games);
+    currentGame_ = std::move(currentId);
+    nextGame_.clear();
+    RebuildMenu();
+}
+
+void PortRuntime::RebuildMenu()
+{
+    menuItems_ = { MenuItem::Resume, MenuItem::Achievements, MenuItem::ButtonTest };
+    if (games_.size() > 1)
+        menuItems_.push_back(MenuItem::Games);
+    menuItems_.push_back(MenuItem::Restart);
+    menuItems_.push_back(MenuItem::Close);
+}
+
+const char *PortRuntime::Label(MenuItem item)
+{
+    switch (item) {
+        case MenuItem::Resume: return "Resume";
+        case MenuItem::Achievements: return "Achievements";
+        case MenuItem::ButtonTest: return "Button test";
+        case MenuItem::Games: return "Retro games";
+        case MenuItem::Restart: return "Restart game";
+        case MenuItem::Close: return "Close app";
+    }
+    return "";
 }
 
 void PortRuntime::OnEngineVideoReady(SDL_Window *, SDL_Renderer *renderer, SDL_AudioDeviceID audioDevice, WebOSPortRedrawFn redraw)
@@ -256,18 +289,20 @@ bool PortRuntime::HandleMenuEvent(const SDL_Event &event, bool *stickWasNeutral)
         HandleAchievementsAction(action);
         return false;
     }
+    if (screen_ == Screen::Games)
+        return HandleGamesAction(action);
     return HandleMainAction(action);
 }
 
 bool PortRuntime::HandleMainAction(MenuAction action)
 {
-    const int count = static_cast<int>(MenuItem::Count);
+    const int count = static_cast<int>(menuItems_.size());
     switch (action) {
         case MenuAction::Up: selected_ = (selected_ + count - 1) % count; return false;
         case MenuAction::Down: selected_ = (selected_ + 1) % count; return false;
         case MenuAction::Cancel: menuOpen_ = false; return true;
         case MenuAction::Confirm:
-            switch (static_cast<MenuItem>(selected_)) {
+            switch (menuItems_[static_cast<std::size_t>(selected_)]) {
                 case MenuItem::Resume: menuOpen_ = false; return true;
                 case MenuItem::Achievements:
                     achievements_        = achievementProvider_ ? achievementProvider_() : std::vector<AchievementEntry>{};
@@ -279,7 +314,18 @@ bool PortRuntime::HandleMainAction(MenuAction action)
                     buttonTestLog_.clear();
                     screen_ = Screen::ButtonTest;
                     return false;
+                case MenuItem::Games: {
+                    // Start on the running game.
+                    gameSelected_ = 0;
+                    for (std::size_t i = 0; i < games_.size(); ++i) {
+                        if (games_[i].id == currentGame_)
+                            gameSelected_ = static_cast<int>(i);
+                    }
+                    screen_ = Screen::Games;
+                    return false;
+                }
                 case MenuItem::Restart:
+                    nextGame_.clear(); // Same game.
                     restartRequested_ = true;
                     quitRequested_    = true;
                     menuOpen_         = false;
@@ -288,7 +334,6 @@ bool PortRuntime::HandleMainAction(MenuAction action)
                     quitRequested_ = true;
                     menuOpen_      = false;
                     return true;
-                case MenuItem::Count: return false;
             }
             return false;
         case MenuAction::None: return false;
@@ -318,6 +363,39 @@ void PortRuntime::HandleAchievementsAction(MenuAction action)
         achievementTop_ = achievementSelected_;
     else if (achievementSelected_ >= achievementTop_ + kAchievementRows)
         achievementTop_ = achievementSelected_ - kAchievementRows + 1;
+}
+
+bool PortRuntime::HandleGamesAction(MenuAction action)
+{
+    const int count = static_cast<int>(games_.size());
+    switch (action) {
+        case MenuAction::Up:
+            if (count > 0)
+                gameSelected_ = (gameSelected_ + count - 1) % count;
+            return false;
+        case MenuAction::Down:
+            if (count > 0)
+                gameSelected_ = (gameSelected_ + 1) % count;
+            return false;
+        case MenuAction::Cancel: screen_ = Screen::Main; return false;
+        case MenuAction::Confirm: {
+            if (count == 0)
+                return false;
+            const GameChoice &choice = games_[static_cast<std::size_t>(gameSelected_)];
+            if (choice.id == currentGame_) {
+                screen_ = Screen::Main; // Already playing it.
+                return false;
+            }
+            // A fresh process is the only clean way to switch engine and data.
+            nextGame_         = choice.id;
+            restartRequested_ = true;
+            quitRequested_    = true;
+            menuOpen_         = false;
+            return true;
+        }
+        case MenuAction::None: return false;
+    }
+    return false;
 }
 
 void PortRuntime::HandleButtonTestEvent(const SDL_Event &event)
@@ -392,6 +470,7 @@ void PortRuntime::DrawMenu(int width, int height, int scale) const
         case Screen::Main: DrawMainPage(width, height, scale); break;
         case Screen::Achievements: DrawAchievementsPage(width, height, scale); break;
         case Screen::ButtonTest: DrawButtonTestPage(width, height, scale); break;
+        case Screen::Games: DrawGamesPage(width, height, scale); break;
     }
 }
 
@@ -409,10 +488,10 @@ void PortRuntime::DrawMainPage(int width, int height, int scale) const
     int contentW      = std::max(TextRenderer::MeasureText(hint, scale), TextRenderer::MeasureText(about, scale));
     if (restartPending)
         contentW = std::max(contentW, TextRenderer::MeasureText(kPendingMsg, scale));
-    for (const char *label : kMenuLabels)
-        contentW = std::max(contentW, TextRenderer::MeasureText(label, scale));
+    for (const MenuItem item : menuItems_)
+        contentW = std::max(contentW, TextRenderer::MeasureText(Label(item), scale));
 
-    const int menuLines = static_cast<int>(MenuItem::Count);
+    const int menuLines = static_cast<int>(menuItems_.size());
     const int infoLines = restartPending ? 3 : 2; // [pending], transfer hint, about
     const int panelW    = std::min(width - 8 * scale, contentW + 24 * scale);
     const int panelH    = lineGap * (menuLines + infoLines) + lineGap * 3; // title, gaps and padding
@@ -426,7 +505,7 @@ void PortRuntime::DrawMainPage(int width, int height, int scale) const
         const bool selected = i == selected_;
         if (selected)
             text_.FillRect(panel.x + 4 * scale, y - 3 * scale, panel.w - 8 * scale, glyph + 6 * scale, kSelection);
-        text_.DrawTextCentered(width / 2, y, kMenuLabels[static_cast<std::size_t>(i)], scale, selected ? kHighlight : kText);
+        text_.DrawTextCentered(width / 2, y, Label(menuItems_[static_cast<std::size_t>(i)]), scale, selected ? kHighlight : kText);
         y += lineGap;
     }
 
@@ -532,6 +611,45 @@ void PortRuntime::DrawButtonTestPage(int width, int height, int scale) const
     }
 
     text_.DrawTextCentered(width / 2, panel.y + panel.h - pad - glyph, "BACK: return", scale, kDim);
+}
+
+void PortRuntime::DrawGamesPage(int width, int height, int scale) const
+{
+    const int glyph    = BitmapFont::kGlyphSize * scale;
+    const int lineGap  = glyph + 5 * scale;
+    const int pad      = 8 * scale;
+    const int panelW   = std::min(width - 8 * scale, 52 * glyph);
+    const int maxChars = (panelW - 2 * pad) / glyph;
+    const int rows     = static_cast<int>(games_.size());
+    const int panelH   = lineGap * (rows + 6) + pad;
+    const SDL_Rect panel = DrawPanel(width, height, panelW, panelH, scale);
+
+    int y = panel.y + pad;
+    text_.DrawTextCentered(width / 2, y, "RETRO GAMES", scale, kHighlight);
+    y += lineGap * 3 / 2;
+
+    for (int i = 0; i < rows; ++i) {
+        const GameChoice &choice = games_[static_cast<std::size_t>(i)];
+        const bool selected      = i == gameSelected_;
+        if (selected)
+            text_.FillRect(panel.x + 4 * scale, y - 2 * scale, panel.w - 8 * scale, glyph + 4 * scale, kSelection);
+        const std::string label = choice.id == currentGame_ ? choice.title + "  (playing)" : choice.title;
+        text_.DrawTextCentered(width / 2, y, label, scale, selected ? kHighlight : kText);
+        y += lineGap;
+    }
+
+    // How the selected game will play (with or without sound, which release).
+    y += lineGap / 2;
+    if (rows > 0) {
+        const std::vector<std::string> lines =
+            WrapText(games_[static_cast<std::size_t>(gameSelected_)].note, static_cast<std::size_t>(maxChars));
+        for (std::size_t i = 0; i < lines.size() && i < 2; ++i) {
+            text_.DrawTextCentered(width / 2, y, lines[i], scale, kDim);
+            y += lineGap;
+        }
+    }
+
+    text_.DrawTextCentered(width / 2, panel.y + panel.h - pad - glyph, "OK: play   BACK: return", scale, kDim);
 }
 
 void PortRuntime::DrawToast(int width, int height, int scale)

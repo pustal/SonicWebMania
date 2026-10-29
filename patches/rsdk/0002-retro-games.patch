@@ -1,0 +1,240 @@
+diff --git a/RSDKv5/RSDK/Audio/Audio.cpp b/RSDKv5/RSDK/Audio/Audio.cpp
+index ff84a0b..130c6fa 100644
+--- a/RSDKv5/RSDK/Audio/Audio.cpp
++++ b/RSDKv5/RSDK/Audio/Audio.cpp
+@@ -408,6 +408,53 @@ void RSDK::LoadSfxToSlot(char *filename, uint8 slot, uint8 plays, uint8 scope)
+ #endif
+         }
+ #if !RETRO_USE_ORIGINAL_CODE
++        else if (type == 'g' || type == 'G') {
++            // (webOS port) Ogg Vorbis sound effects, as in the RSDKv4 packs of
++            // the 2013 Sonic 1 and 2 releases (RSDKv5 games only use .wav).
++            // Decoded once into the same mono float format as a .wav effect;
++            // the first channel is kept and the rate converted to the mixer's.
++            uint8 *oggData = (uint8 *)malloc(info.fileSize);
++            int32 error    = 0;
++            stb_vorbis *ogg = NULL;
++            if (oggData && ReadBytes(&info, oggData, info.fileSize) == (size_t)info.fileSize)
++                ogg = stb_vorbis_open_memory(oggData, info.fileSize, &error, NULL);
++
++            if (ogg) {
++                const stb_vorbis_info oggInfo = stb_vorbis_get_info(ogg);
++                const uint32 sourceLength     = stb_vorbis_stream_length_in_samples(ogg);
++                float *source                 = sourceLength ? (float *)malloc(sizeof(float) * sourceLength) : NULL;
++                const int32 decoded           = source ? stb_vorbis_get_samples_float_interleaved(ogg, 1, source, sourceLength) : 0;
++
++                if (decoded > 0 && oggInfo.sample_rate > 0) {
++                    const double step   = oggInfo.sample_rate / (double)AUDIO_FREQUENCY;
++                    const uint32 length = (uint32)(decoded / step);
++                    AllocateStorage((void **)&sfxList[slot].buffer, sizeof(float) * length, DATASET_SFX, false);
++                    sfxList[slot].length = length;
++
++                    float *buffer = (float *)sfxList[slot].buffer;
++                    for (uint32 s = 0; s < length; ++s) {
++                        // Linear interpolation between the two nearest source samples.
++                        const double pos  = s * step;
++                        const int32 index = (int32)pos;
++                        const float frac  = (float)(pos - index);
++                        const float a     = source[index];
++                        const float b     = index + 1 < decoded ? source[index + 1] : a;
++                        *buffer++         = (a + (b - a) * frac) * 0.75f; // Same level as .wav effects.
++                    }
++                }
++                else {
++                    sfxList[slot].scope = SCOPE_NONE; // Never play a half-made effect.
++                    PrintLog(PRINT_ERROR, "Unable to decode sfx: %s", filename);
++                }
++                free(source);
++                stb_vorbis_close(ogg);
++            }
++            else {
++                sfxList[slot].scope = SCOPE_NONE;
++                PrintLog(PRINT_ERROR, "Unable to read sfx: %s (vorbis error %d)", filename, error);
++            }
++            free(oggData);
++        }
+         else {
+             // what the
+             PrintLog(PRINT_ERROR, "Could not find header in sfx: %s", filename);
+diff --git a/RSDKv5/RSDK/Core/Reader.cpp b/RSDKv5/RSDK/Core/Reader.cpp
+index 32e3b43..0ee40b4 100644
+--- a/RSDKv5/RSDK/Core/Reader.cpp
++++ b/RSDKv5/RSDK/Core/Reader.cpp
+@@ -80,7 +80,8 @@ void RSDK::DetectEngineVersion()
+     }
+     else {
+         info.externalFile = true;
+-        if (LoadFile(&info, dataPacks[dataPackCount - 1].name, FMODE_RB)) {
++        // (webOS port) The first pack is the game; a later one only adds files.
++        if (LoadFile(&info, dataPacks[0].name, FMODE_RB)) {
+             uint32 sig = ReadInt32(&info, false);
+             if (sig == RSDK_SIGNATURE_RSDK) {
+                 ReadInt8(&info); // 'v'
+@@ -90,6 +91,7 @@ void RSDK::DetectEngineVersion()
+                     default: break;
+                     case '3': engine.version = 3; break;
+                     case '4': engine.version = 4; break;
++                    case 'B': engine.version = 4; break; // (webOS port) RSDKv4 packs of the 2013 releases
+                     case '5': engine.version = 5; break;
+                 }
+             }
+@@ -106,42 +108,65 @@ void RSDK::DetectEngineVersion()
+ 
+ bool32 RSDK::LoadDataPack(const char *filePath, size_t fileOffset, bool32 useBuffer)
+ {
++    // (webOS port) A second pack may follow the first; keep within the tables.
++    if (dataPackCount >= DATAPACK_COUNT)
++        return false;
+     MEM_ZERO(dataPacks[dataPackCount]);
+     useDataPack = false;
+     FileInfo info;
+ 
+     char dataPackPath[0x100];
+-    sprintf_s(dataPackPath, sizeof(dataPackPath), "%s%s", SKU::userFileDir, filePath);
++    // (webOS port) An absolute path (a pack on a USB drive) is used as it is.
++    if (filePath[0] == '/')
++        sprintf_s(dataPackPath, sizeof(dataPackPath), "%s", filePath);
++    else
++        sprintf_s(dataPackPath, sizeof(dataPackPath), "%s%s", SKU::userFileDir, filePath);
+ 
+     InitFileInfo(&info);
+     info.externalFile = true;
+     if (LoadFile(&info, dataPackPath, FMODE_RB)) {
+         uint32 sig = ReadInt32(&info, false);
+-        if (sig != RSDK_SIGNATURE_RSDK)
++        if (sig != RSDK_SIGNATURE_RSDK) {
++            // (webOS port) Close the file, and keep any pack already loaded in use.
++            CloseFile(&info);
++            useDataPack = dataPackCount > 0;
+             return false;
++        }
+ 
+         useDataPack = true;
+ 
+-        ReadInt8(&info); // 'v'
+-        ReadInt8(&info); // version
++        ReadInt8(&info);                         // 'v'
++        const uint8 packVersion = ReadInt8(&info); // version
+ 
+         strcpy(dataPacks[dataPackCount].name, dataPackPath);
+ 
+         dataPacks[dataPackCount].fileCount = ReadInt16(&info);
++        // (webOS port) Each pack's entries follow the previous packs' ones
++        // (upstream wrote every pack from index 0, so a second pack replaced
++        // the first's list). A lookup takes the first match, so files of an
++        // earlier pack win over a later one's.
++        if (dataFileListCount + dataPacks[dataPackCount].fileCount > DATAFILE_COUNT) {
++            PrintLog(PRINT_NORMAL, "Data pack %s has too many files for the file table", dataPackPath);
++            CloseFile(&info);
++            useDataPack = dataPackCount > 0;
++            return false;
++        }
+         for (int32 f = 0; f < dataPacks[dataPackCount].fileCount; ++f) {
++            RSDKFileInfo *entry = &dataFileList[dataFileListCount + f];
+             uint8 b[4];
+             for (int32 y = 0; y < 4; y++) {
+                 ReadBytes(&info, b, 4);
+-                dataFileList[f].hash[y] = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | (b[3] << 0);
++                entry->hash[y] = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | (b[3] << 0);
+             }
+ 
+-            dataFileList[f].offset = ReadInt32(&info, false);
+-            dataFileList[f].size   = ReadInt32(&info, false);
++            entry->offset = ReadInt32(&info, false);
++            entry->size   = ReadInt32(&info, false);
+ 
+-            dataFileList[f].encrypted = (dataFileList[f].size & 0x80000000) != 0;
+-            dataFileList[f].size &= 0x7FFFFFFF;
+-            dataFileList[f].useFileBuffer = useBuffer;
+-            dataFileList[f].packID        = dataPackCount;
++            entry->encrypted = (entry->size & 0x80000000) != 0;
++            entry->size &= 0x7FFFFFFF;
++            entry->useFileBuffer = useBuffer;
++            entry->packID        = dataPackCount;
++            entry->sizeKeys      = packVersion == 'B';
+         }
+ 
+         dataPacks[dataPackCount].fileBuffer = NULL;
+@@ -159,7 +184,8 @@ bool32 RSDK::LoadDataPack(const char *filePath, size_t fileOffset, bool32 useBuf
+         return true;
+     }
+     else {
+-        useDataPack = false;
++        // (webOS port) A missing extra pack must not switch off the ones loaded.
++        useDataPack = dataPackCount > 0;
+         return false;
+     }
+ }
+@@ -211,7 +237,15 @@ bool32 RSDK::OpenDataFile(FileInfo *info, const char *filename)
+         memset(info->encryptionKeyA, 0, 0x10 * sizeof(uint8));
+         memset(info->encryptionKeyB, 0, 0x10 * sizeof(uint8));
+         if (info->encrypted) {
+-            GenerateELoadKeys(info, filename, info->fileSize);
++            if (file->sizeKeys) {
++                // (webOS port) RSDKvB: key A from the size, key B from half the size plus one.
++                char sizeKey[0x10];
++                sprintf_s(sizeKey, sizeof(sizeKey), "%d", info->fileSize);
++                GenerateELoadKeys(info, sizeKey, (info->fileSize >> 1) + 1);
++            }
++            else {
++                GenerateELoadKeys(info, filename, info->fileSize);
++            }
+             info->eKeyNo      = (info->fileSize / 4) & 0x7F;
+             info->eKeyPosA    = 0;
+             info->eKeyPosB    = 8;
+diff --git a/RSDKv5/RSDK/Core/Reader.hpp b/RSDKv5/RSDK/Core/Reader.hpp
+index a6b559d..7ea24b3 100644
+--- a/RSDKv5/RSDK/Core/Reader.hpp
++++ b/RSDKv5/RSDK/Core/Reader.hpp
+@@ -34,7 +34,9 @@ namespace RSDK
+ #define RSDK_SIGNATURE_DATA (0x61746144) // "Data"
+ #endif
+ 
+-#define DATAFILE_COUNT (0x1000)
++// (webOS port) Room for two packs at once: a retro game's data plus the pack
++// its music and sound effects come from (Game:extraDataFile in Settings.ini).
++#define DATAFILE_COUNT (0x4000)
+ #define DATAPACK_COUNT (4)
+ 
+ enum Scopes {
+@@ -67,6 +69,9 @@ struct RSDKFileInfo {
+     uint8 encrypted;
+     uint8 useFileBuffer;
+     int32 packID;
++    // (webOS port) Set for files of an RSDKvB pack (the 2013 Sonic 1 and 2
++    // releases), whose keys come from the file size instead of its name.
++    uint8 sizeKeys;
+ };
+ 
+ struct RSDKContainer {
+diff --git a/RSDKv5/RSDK/User/Core/UserCore.cpp b/RSDKv5/RSDK/User/Core/UserCore.cpp
+index 6a0b926..3a802b8 100644
+--- a/RSDKv5/RSDK/User/Core/UserCore.cpp
++++ b/RSDKv5/RSDK/User/Core/UserCore.cpp
+@@ -315,8 +315,15 @@ void RSDK::LoadSettingsINI()
+ #endif
+ 
+         engine.devMenu = true;
+-        if (LoadDataPack(iniparser_getstring(ini, "Game:dataFile", "Data.rsdk"), 0, useBuffer))
++        if (LoadDataPack(iniparser_getstring(ini, "Game:dataFile", "Data.rsdk"), 0, useBuffer)) {
+             engine.devMenu = iniparser_getboolean(ini, "Game:devMenu", false);
++            // (webOS port) An optional second pack whose files fill in what the
++            // first lacks: Sonic Origins' data has no music or sound effects,
++            // which the earlier releases' packs supply.
++            const char *extraPack = iniparser_getstring(ini, "Game:extraDataFile", "");
++            if (extraPack && *extraPack && !LoadDataPack(extraPack, 0, useBuffer))
++                PrintLog(PRINT_NORMAL, "Could not load the extra data pack %s", extraPack);
++        }
+ 
+ #if !RETRO_USE_ORIGINAL_CODE
+         customSettings.region = iniparser_getint(ini, "Game:region", -1);
+@@ -597,6 +604,9 @@ void RSDK::SaveSettingsINI(bool32 writeToFile)
+             if (strcmp(iniparser_getstring(ini, "Game:dataFile", ";unknown;"), ";unknown;") != 0 || (!RETRO_USE_ORIGINAL_CODE && RETRO_REV0U)) {
+                 WriteText(file, "dataFile=%s\n", iniparser_getstring(ini, "Game:dataFile", "Data.rsdk"));
+             }
++            // (webOS port) Keep the optional second pack (see LoadSettingsINI).
++            if (strcmp(iniparser_getstring(ini, "Game:extraDataFile", ""), "") != 0)
++                WriteText(file, "extraDataFile=%s\n", iniparser_getstring(ini, "Game:extraDataFile", ""));
+ 
+             if (strcmp(iniparser_getstring(ini, "Game:devMenu", ";unknown;"), ";unknown;") != 0 || (!RETRO_USE_ORIGINAL_CODE && RETRO_REV0U))
+                 WriteText(file, "devMenu=%s\n", (engine.devMenu ? "y" : "n"));
