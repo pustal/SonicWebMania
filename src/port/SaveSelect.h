@@ -1,7 +1,7 @@
 /**
  * @file SaveSelect.h
  * @brief What the Back-menu runtime's save screen shows and returns, for
- *        the retro games (Sonic 1 and 2), independent of the engine.
+ *        the retro games, independent of the engine.
  *
  * The 2013 releases of Sonic 1 and 2 drew their save slots in native code
  * and Sonic Origins draws them in its own program; with only the game data,
@@ -9,6 +9,11 @@
  * port fills that gap: src/RetroSaves.cpp (which knows the engine) reads the
  * game's save memory into a SaveSelectRequest, PortRuntime::RunSaveSelect()
  * shows it over the frozen title screen, and the result is applied back.
+ *
+ * The screen's pages, each shown only when the request has something for it:
+ *   1. Mode (Sonic Origins packs): Anniversary, Classic, Mirror, Boss Rush;
+ *   2. Slots: no save, or one of four slots (continue, new game, delete);
+ *   3. Character, for a new game.
  */
 #ifndef SWM_SAVE_SELECT_H
 #define SWM_SAVE_SELECT_H
@@ -39,17 +44,26 @@ struct RetroCharacter {
     std::string name; ///< Shown in the list.
 };
 
+/** A way to play the game (Sonic Origins' modes). */
+struct RetroMode {
+    std::string name;        ///< Shown in the list, e.g. "Anniversary".
+    std::string description; ///< Shown under the selected entry.
+    bool usesSaves = true;   ///< Goes on to the save slots (Boss Rush does not).
+};
+
 /** Everything the save screen shows. */
 struct SaveSelectRequest {
     std::string title; ///< The game's name.
+    std::vector<RetroMode> modes; ///< Empty: no mode page.
+    bool slotsEnabled = true;     ///< False: no slot page (the game has its own menu).
     std::array<RetroSaveSlot, kSaveSlotCount> slots{};
-    std::vector<RetroCharacter> characters;
+    std::vector<RetroCharacter> characters; ///< Empty: no character page.
 };
 
 /** How the save screen ended. */
 enum class SaveSelectAction {
     Cancel,   ///< Back: return to the title screen.
-    NoSave,   ///< Play without saving.
+    NoSave,   ///< Play without saving (also: a mode was chosen where there are no slots).
     NewGame,  ///< Start a new game in `slot`.
     Continue, ///< Continue the game in `slot`.
 };
@@ -58,6 +72,7 @@ struct SaveSelectResult {
     SaveSelectAction action = SaveSelectAction::Cancel;
     int slot      = -1; ///< 0-based slot for NewGame / Continue.
     int character = 0;  ///< Character id for NoSave / NewGame.
+    int mode      = 0;  ///< Index into SaveSelectRequest::modes (0 when there are none).
     std::vector<int> deleted; ///< Slots the player deleted on the screen (apply even on Cancel).
 };
 

@@ -1,0 +1,116 @@
+diff --git a/RSDKv5/RSDK/Graphics/Legacy/DrawingLegacy.cpp b/RSDKv5/RSDK/Graphics/Legacy/DrawingLegacy.cpp
+index a877320..51f4281 100644
+--- a/RSDKv5/RSDK/Graphics/Legacy/DrawingLegacy.cpp
++++ b/RSDKv5/RSDK/Graphics/Legacy/DrawingLegacy.cpp
+@@ -1,3 +1,7 @@
++// webOS port: Mirror mode (see src/port/WebOSPortHooks.h)
++#if RETRO_WEBOS_PORT
++#include "WebOSPortHooks.h"
++#endif
+ 
+ 
+ #include "v3/DrawingLegacyv3.cpp"
+@@ -1325,6 +1329,22 @@ void RSDK::Legacy::Draw3DSkyLayer(int32 layerID)
+     }
+ }
+ 
++#if RETRO_WEBOS_PORT
++void RSDK::Legacy::MirrorFrameBuffer()
++{
++    // (webOS port) Reflects what has been drawn so far horizontally (Mirror mode).
++    for (int32 y = 0; y < SCREEN_YSIZE; ++y) {
++        uint16 *left  = &currentScreen->frameBuffer[GFX_LINESIZE * y];
++        uint16 *right = left + SCREEN_XSIZE - 1;
++        while (left < right) {
++            const uint16 pixel = *left;
++            *left++            = *right;
++            *right--           = pixel;
++        }
++    }
++}
++#endif
++
+ void RSDK::Legacy::DrawRectangle(int32 XPos, int32 YPos, int32 width, int32 height, int32 R, int32 G, int32 B, int32 A)
+ {
+     if (A > 0xFF)
+diff --git a/RSDKv5/RSDK/Graphics/Legacy/DrawingLegacy.hpp b/RSDKv5/RSDK/Graphics/Legacy/DrawingLegacy.hpp
+index b0399de..bfbe2ba 100644
+--- a/RSDKv5/RSDK/Graphics/Legacy/DrawingLegacy.hpp
++++ b/RSDKv5/RSDK/Graphics/Legacy/DrawingLegacy.hpp
+@@ -52,6 +52,10 @@ void Draw3DFloorLayer(int32 layerID);
+ void Draw3DSkyLayer(int32 layerID);
+ 
+ // Shape Drawing
++#if RETRO_WEBOS_PORT
++// (webOS port) Reflects the frame drawn so far horizontally, for Mirror mode.
++void MirrorFrameBuffer();
++#endif
+ void DrawRectangle(int32 XPos, int32 YPos, int32 width, int32 height, int32 R, int32 G, int32 B, int32 A);
+ void DrawTintRectangle(int32 XPos, int32 YPos, int32 width, int32 height);
+ void DrawScaledTintMask(int32 direction, int32 XPos, int32 YPos, int32 pivotX, int32 pivotY, int32 scaleX, int32 scaleY, int32 width, int32 height,
+diff --git a/RSDKv5/RSDK/Graphics/Legacy/v3/DrawingLegacyv3.cpp b/RSDKv5/RSDK/Graphics/Legacy/v3/DrawingLegacyv3.cpp
+index dff3928..6a8335d 100644
+--- a/RSDKv5/RSDK/Graphics/Legacy/v3/DrawingLegacyv3.cpp
++++ b/RSDKv5/RSDK/Graphics/Legacy/v3/DrawingLegacyv3.cpp
+@@ -72,6 +72,11 @@ void RSDK::Legacy::v3::DrawStageGFX()
+     DrawObjectList(5);
+     // Extra Origins draw list
+     DrawObjectList(7);
++#if RETRO_WEBOS_PORT
++    // (webOS port) Mirror mode: the stage so far, not the HUD and text drawn on list 6.
++    if (WebOSPort_IsMirrored())
++        MirrorFrameBuffer();
++#endif
+     DrawObjectList(6);
+ 
+     if (fadeMode > 0)
+diff --git a/RSDKv5/RSDK/Graphics/Legacy/v4/DrawingLegacyv4.cpp b/RSDKv5/RSDK/Graphics/Legacy/v4/DrawingLegacyv4.cpp
+index 705d52b..872de74 100644
+--- a/RSDKv5/RSDK/Graphics/Legacy/v4/DrawingLegacyv4.cpp
++++ b/RSDKv5/RSDK/Graphics/Legacy/v4/DrawingLegacyv4.cpp
+@@ -116,6 +116,11 @@ void RSDK::Legacy::v4::DrawStageGFX()
+ 
+         DrawObjectList(5);
+         DrawObjectList(7); // ???
++#if RETRO_WEBOS_PORT
++        // (webOS port) Mirror mode: the stage so far, not the HUD and text drawn on list 6.
++        if (WebOSPort_IsMirrored())
++            MirrorFrameBuffer();
++#endif
+         DrawObjectList(6);
+     }
+ 
+diff --git a/RSDKv5/RSDK/Input/Input.cpp b/RSDKv5/RSDK/Input/Input.cpp
+index c619d40..cc63035 100644
+--- a/RSDKv5/RSDK/Input/Input.cpp
++++ b/RSDKv5/RSDK/Input/Input.cpp
+@@ -1,3 +1,7 @@
++// webOS port: Mirror mode input (see src/port/WebOSPortHooks.h)
++#if RETRO_WEBOS_PORT
++#include "WebOSPortHooks.h"
++#endif
+ #include "RSDK/Core/RetroEngine.hpp"
+ 
+ using namespace RSDK;
+@@ -232,6 +236,21 @@ void RSDK::ProcessInput()
+     RSDK::SKU::HandleSpecialKeys();
+ #endif
+ 
++#if RETRO_WEBOS_PORT
++    // (webOS port) Sonic Origins' Mirror mode: the picture is mirrored, so left and right swap.
++    if (WebOSPort_IsMirrored()) {
++        for (int32 c = 0; c <= PLAYER_COUNT; ++c) {
++            bool32 left                    = controller[c].keyLeft.press;
++            controller[c].keyLeft.press    = controller[c].keyRight.press;
++            controller[c].keyRight.press   = left;
++            left                           = stickL[c].keyLeft.press;
++            stickL[c].keyLeft.press        = stickL[c].keyRight.press;
++            stickL[c].keyRight.press       = left;
++            stickL[c].hDelta               = -stickL[c].hDelta;
++        }
++    }
++#endif
++
+     for (int32 c = 0; c <= PLAYER_COUNT; ++c) {
+         if (c <= 0 || inputSlots[c - 1] != INPUT_UNASSIGNED) {
+             InputState *cont[] = {

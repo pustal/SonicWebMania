@@ -144,17 +144,30 @@ int Storage::ApplyPendingFiles() const
         }
     }
 
-    // Saves and settings uploaded during the previous session.
-    const fs::path incoming = IncomingDir();
-    if (fs::is_directory(incoming, ec)) {
-        for (const fs::directory_entry &entry : fs::directory_iterator(incoming, ec)) {
+    // Saves and settings uploaded during the previous session: the data
+    // directory's in incoming/, a retro game's in incoming/games/<id>/.
+    const auto moveFiles = [&applied](const fs::path &from, const std::string &to) {
+        std::error_code listError;
+        for (const fs::directory_entry &entry : fs::directory_iterator(from, listError)) {
             const std::string name = entry.path().filename().string();
-            if (!entry.is_regular_file() || !IsAllowedUserFileName(name))
+            std::error_code typeError;
+            if (!entry.is_regular_file(typeError) || !IsAllowedUserFileName(name))
                 continue;
 
             std::error_code moveError;
-            fs::rename(entry.path(), PathFor(name), moveError);
+            fs::create_directories(to, moveError);
+            fs::rename(entry.path(), to + "/" + name, moveError);
             applied += moveError ? 0 : 1;
+        }
+    };
+    const fs::path incoming = IncomingDir();
+    if (fs::is_directory(incoming, ec)) {
+        moveFiles(incoming, root_);
+        for (const fs::directory_entry &game : fs::directory_iterator(incoming / kGamesFolderName, ec)) {
+            const std::string id = game.path().filename().string();
+            std::error_code typeError;
+            if (game.is_directory(typeError) && IsPlainName(id))
+                moveFiles(game.path(), PathFor(std::string(kGamesFolderName) + "/" + id));
         }
     }
 
@@ -171,12 +184,13 @@ void Storage::TrimLog() const
     std::ofstream truncate(logPath, std::ios::binary | std::ios::trunc);
 }
 
-std::vector<UserFile> Storage::ListUserFiles() const
+std::vector<UserFile> Storage::ListUserFiles(const std::string &subdir) const
 {
     std::vector<UserFile> files;
     std::error_code ec;
 
-    for (const fs::directory_entry &entry : fs::directory_iterator(root_, ec)) {
+    const fs::path folder = subdir.empty() ? fs::path(root_) : fs::path(root_) / subdir;
+    for (const fs::directory_entry &entry : fs::directory_iterator(folder, ec)) {
         const std::string name = entry.path().filename().string();
         if (!entry.is_regular_file() || !IsAllowedUserFileName(name))
             continue;
@@ -186,6 +200,13 @@ std::vector<UserFile> Storage::ListUserFiles() const
 
     std::sort(files.begin(), files.end(), [](const UserFile &a, const UserFile &b) { return a.name < b.name; });
     return files;
+}
+
+bool Storage::IsPlainName(const std::string &name)
+{
+    constexpr std::size_t kMaxNameLength = 32;
+    return !name.empty() && name.size() <= kMaxNameLength
+           && std::all_of(name.begin(), name.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); });
 }
 
 bool Storage::IsAllowedUserFileName(const std::string &name)

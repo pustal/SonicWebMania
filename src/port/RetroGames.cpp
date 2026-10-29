@@ -188,7 +188,7 @@ std::string RetroLibrary::UsbPackFolder(const std::string &mountPoint)
 
 std::string RetroLibrary::WorkFolder(const std::string &id) const
 {
-    return storage_.PathFor(std::string(kGamesFolderName) + "/" + id);
+    return storage_.PathFor(std::string(Storage::kGamesFolderName) + "/" + id);
 }
 
 PackState RetroLibrary::Inspect(const std::string &path, char *version)

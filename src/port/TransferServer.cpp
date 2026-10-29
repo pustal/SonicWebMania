@@ -6,9 +6,9 @@
  *   GET  /                    the upload page (web/index.html, embedded at build time)
  *   GET  /api/status          JSON: mode, free space, data pack state, settings
  *   PUT  /api/data            raw body = Data.rsdk (streamed to disk)
- *   GET  /api/files           JSON list of saves/settings files
- *   GET  /api/files/:name     download one file
- *   PUT  /api/files/:name     raw body = replacement file (applied at next launch while playing)
+ *   GET  /api/files           JSON: saves/settings files, Sonic Mania's and each retro game's
+ *   GET  /api/files/:name[?game=<id>]   download one file (a retro game's with ?game=sonic1 ...)
+ *   PUT  /api/files/:name[?game=<id>]   raw body = replacement file (applied at next launch while playing)
  *   PUT  /api/settings?plusEnabled=0|1&retroEnabled=0|1   (either or both)
  *   GET  /api/retro           JSON: retro mode, TV and USB space, each game's packs
  *   PUT  /api/retro/:game/:edition?dest=tv|usb[&mount=<USB mount point>]
@@ -161,6 +161,40 @@ std::int64_t StreamBodyToFile(const httplib::ContentReader &reader, const std::s
     if (!completed || !flushed)
         return -1;
     return static_cast<std::int64_t>(written);
+}
+
+/**
+ * The folder (relative to the data directory) a /api/files request is about:
+ * "" for Sonic Mania's files, "games/<id>" with ?game=<id> for a retro game.
+ *
+ * @return False for an unknown game.
+ */
+bool FilesFolder(const httplib::Request &req, std::string *folder)
+{
+    const std::string game = req.get_param_value("game");
+    if (game.empty()) {
+        folder->clear();
+        return true;
+    }
+    if (!RetroLibrary::FindGame(game))
+        return false;
+    *folder = std::string(Storage::kGamesFolderName) + "/" + game;
+    return true;
+}
+
+/** JSON array of @p files. */
+std::string FileListJson(const std::vector<UserFile> &files)
+{
+    std::ostringstream json;
+    json << "[";
+    bool first = true;
+    for (const UserFile &file : files) {
+        json << (first ? "" : ",") << "{\"name\":\"" << JsonEscape(file.name) << "\",\"size\":" << file.size
+             << ",\"mtime\":" << file.mtime << "}";
+        first = false;
+    }
+    json << "]";
+    return json.str();
 }
 
 } // namespace
@@ -352,11 +386,13 @@ void TransferServer::RegisterRoutes()
 
     server.Get("/api/files", [this](const httplib::Request &, httplib::Response &res) {
         std::ostringstream json;
-        json << "{\"files\":[";
+        json << "{\"files\":" << FileListJson(storage_.ListUserFiles()) << ",\"games\":[";
+        // Every retro game, also before its first start (saves can be uploaded ahead).
         bool first = true;
-        for (const UserFile &file : storage_.ListUserFiles()) {
-            json << (first ? "" : ",") << "{\"name\":\"" << JsonEscape(file.name) << "\",\"size\":" << file.size
-                 << ",\"mtime\":" << file.mtime << "}";
+        for (const RetroGameInfo &game : RetroCatalogue()) {
+            const std::string folder = std::string(Storage::kGamesFolderName) + "/" + game.id;
+            json << (first ? "" : ",") << "{\"id\":\"" << game.id << "\",\"title\":\"" << JsonEscape(game.title)
+                 << "\",\"files\":" << FileListJson(storage_.ListUserFiles(folder)) << "}";
             first = false;
         }
         json << "]}";
@@ -367,8 +403,11 @@ void TransferServer::RegisterRoutes()
         const std::string name = req.path_params.at("name");
         if (!Storage::IsAllowedUserFileName(name))
             return Fail(res, 400, "That file name is not allowed.");
+        std::string folder;
+        if (!FilesFolder(req, &folder))
+            return Fail(res, 404, "Unknown game.");
 
-        const std::string path = storage_.PathFor(name);
+        const std::string path = storage_.PathFor(folder.empty() ? name : folder + "/" + name);
         const std::uint64_t size = Storage::FileSize(path);
         if (size == 0 || size > Storage::kMaxUserFileBytes)
             return Fail(res, 404, "File not found.");
@@ -378,7 +417,9 @@ void TransferServer::RegisterRoutes()
         if (!in.read(&body[0], static_cast<std::streamsize>(size)))
             return Fail(res, 500, "Could not read the file.");
 
-        res.set_header("Content-Disposition", "attachment; filename=\"" + name + "\"");
+        // A retro game's file is named after it ("sonic1-SGame.bin"), so downloads do not overwrite each other.
+        const std::string downloadName = folder.empty() ? name : req.get_param_value("game") + "-" + name;
+        res.set_header("Content-Disposition", "attachment; filename=\"" + downloadName + "\"");
         res.set_content(std::move(body), "application/octet-stream");
     });
 
@@ -386,6 +427,9 @@ void TransferServer::RegisterRoutes()
         const std::string name = req.path_params.at("name");
         if (!Storage::IsAllowedUserFileName(name))
             return Fail(res, 400, "Only .bin save files and .ini settings files can be uploaded.");
+        std::string folder;
+        if (!FilesFolder(req, &folder))
+            return Fail(res, 404, "Unknown game.");
 
         std::uint64_t expected = 0;
         if (!ContentLength(req, &expected) || expected == 0)
@@ -396,11 +440,12 @@ void TransferServer::RegisterRoutes()
             return Fail(res, 507, "Not enough space on the TV.");
 
         // While playing, the engine owns its save files: stage the upload for the next launch.
-        const bool setup = setupMode_.load();
+        const bool setup             = setupMode_.load();
+        const std::string targetDir  = folder.empty() ? storage_.Root() : storage_.PathFor(folder);
+        const std::string stagingDir = folder.empty() ? storage_.IncomingDir() : storage_.IncomingDir() + "/" + folder;
         std::error_code ec;
-        if (!setup)
-            std::filesystem::create_directories(storage_.IncomingDir(), ec);
-        const std::string destination = setup ? storage_.PathFor(name) : storage_.IncomingDir() + "/" + name;
+        std::filesystem::create_directories(setup ? targetDir : stagingDir, ec);
+        const std::string destination = (setup ? targetDir : stagingDir) + "/" + name;
         const std::string partPath    = destination + ".part";
 
         const std::int64_t written = StreamBodyToFile(reader, partPath, expected, [](std::uint64_t) {});
@@ -418,7 +463,8 @@ void TransferServer::RegisterRoutes()
             std::lock_guard<std::mutex> lock(statusMutex_);
             status_.restartPending = true;
         }
-        PublishEvent(setup ? name + " uploaded." : name + " received. Restart to use it.");
+        const std::string label = folder.empty() ? name : std::string(RetroLibrary::FindGame(req.get_param_value("game"))->title) + ": " + name;
+        PublishEvent(setup ? label + " uploaded." : label + " received. Restart to use it.");
         res.set_content(setup ? "installed" : "staged", kTextType);
     });
 

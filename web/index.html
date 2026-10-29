@@ -74,10 +74,9 @@
 
     <section>
       <h2>Saves and settings</h2>
-      <table><tbody id="file-list"></tbody></table>
-      <p class="dim">Uploading replaces the file with the same name. While the game is running, uploads are applied on the next start.</p>
-      <label class="button" for="save-files">Upload saves</label>
-      <input id="save-files" type="file" accept=".bin,.ini" multiple>
+      <div id="file-groups"></div>
+      <p class="dim">Uploading replaces the file with the same name. While a game is running, uploads are applied on the next start.
+        A retro game's files download with the game's name in front (sonic1-SGame.bin); upload them under their own name (SGame.bin).</p>
       <p id="save-message"></p>
     </section>
 
@@ -118,6 +117,7 @@
  *             dataPack: DataPackState, plusEnabled: boolean, retroEnabled: boolean, restartPending: boolean,
  *             upload: UploadState }} Status
  * @typedef {{ name: string, size: number, mtime: number }} UserFile
+ * @typedef {{ id: string, title: string, files: UserFile[] }} GameFiles
  * @typedef {{ state: 'missing'|'ready'|'unsupported'|'invalid', location?: 'tv'|'usb', path?: string, size?: number,
  *             version?: string, standalone?: boolean }} RetroPack
  * @typedef {{ id: string, title: string, playable: boolean, sound: boolean, mode: string,
@@ -150,6 +150,8 @@ let lastStatus = null;
 let lastRetro = null;
 /** True while a retro pack upload runs (one at a time). */
 let retroBusy = false;
+/** The retro games' ids, from the last file listing (for the download-name prefix). */
+let retroGameIds = /** @type {string[]} */ ([]);
 
 /** @param {string} id @returns {HTMLElement} */
 function byId(id) {
@@ -413,36 +415,72 @@ async function removeRetroPack(game, edition) {
   await Promise.all([refreshStatus(), refreshRetro()]);
 }
 
-async function refreshFiles() {
-  const response = await api('/api/files');
-  /** @type {{ files: UserFile[] }} */
-  const body = await response.json();
-  const list = byId('file-list');
-  list.replaceChildren();
+/**
+ * One group of the saves section: a heading, its files with download links,
+ * and an upload button.
+ * @param {string} title @param {string} game "" for Sonic Mania, else the retro game's id
+ * @param {UserFile[]} files
+ */
+function fileGroup(title, game, files) {
+  const block = document.createElement('div');
+  block.className = 'game';
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  const table = document.createElement('table');
+  const list = document.createElement('tbody');
+  table.append(list);
 
-  if (body.files.length === 0) {
+  if (files.length === 0) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
     cell.textContent = 'No saves yet.';
     cell.className = 'dim';
     row.append(cell);
     list.append(row);
-    return;
   }
-
-  for (const file of body.files) {
+  const gameQuery = game ? '&game=' + encodeURIComponent(game) : '';
+  for (const file of files) {
     const row = document.createElement('tr');
     const name = document.createElement('td');
     name.textContent = file.name + ' (' + humanBytes(file.size) + ')';
     const action = document.createElement('td');
     const link = document.createElement('a');
-    link.href = '/api/files/' + encodeURIComponent(file.name) + '?pin=' + encodeURIComponent(pin());
-    link.download = file.name;
+    link.href = '/api/files/' + encodeURIComponent(file.name) + '?pin=' + encodeURIComponent(pin()) + gameQuery;
+    link.download = (game ? game + '-' : '') + file.name;
     link.textContent = 'Download';
     action.append(link);
     row.append(name, action);
     list.append(row);
   }
+
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.bin,.ini';
+  input.multiple = true;
+  input.id = 'save-files-' + (game || 'mania');
+  input.addEventListener('change', () => {
+    if (input.files && input.files.length > 0) uploadSaves(input.files, game).catch(() => undefined);
+    input.value = '';
+  });
+  const upload = document.createElement('label');
+  upload.className = 'button';
+  upload.htmlFor = input.id;
+  upload.textContent = 'Upload ' + title + ' saves';
+  const actions = document.createElement('p');
+  actions.append(input, upload);
+
+  block.append(heading, table, actions);
+  return block;
+}
+
+async function refreshFiles() {
+  const response = await api('/api/files');
+  /** @type {{ files: UserFile[], games: GameFiles[] }} */
+  const body = await response.json();
+  retroGameIds = body.games.map((game) => game.id);
+  const groups = byId('file-groups');
+  groups.replaceChildren(fileGroup('Sonic Mania', '', body.files));
+  for (const game of body.games) groups.append(fileGroup(game.title, game.id, game.files));
 }
 
 /**
@@ -503,8 +541,11 @@ async function uploadDataPack(file) {
   await refreshStatus();
 }
 
-/** @param {FileList} files */
-async function uploadSaves(files) {
+/**
+ * Uploads saves or settings into Sonic Mania's folder (@p game "") or a retro game's.
+ * @param {FileList} files @param {string} game
+ */
+async function uploadSaves(files, game) {
   const message = byId('save-message');
   const results = [];
   for (const file of Array.from(files)) {
@@ -512,8 +553,12 @@ async function uploadSaves(files) {
       results.push(file.name + ': not a save file');
       continue;
     }
-    const response = await api('/api/files/' + encodeURIComponent(file.name), { method: 'PUT', body: file });
-    results.push(file.name + ': ' + (response.ok ? 'uploaded' : await response.text()));
+    // A downloaded "sonic1-SGame.bin" goes back as "SGame.bin" (into whichever retro game it is uploaded to).
+    const prefix = game ? retroGameIds.map((id) => id + '-').find((p) => file.name.startsWith(p)) : undefined;
+    const name = prefix ? file.name.slice(prefix.length) : file.name;
+    const query = game ? '?game=' + encodeURIComponent(game) : '';
+    const response = await api('/api/files/' + encodeURIComponent(name) + query, { method: 'PUT', body: file });
+    results.push(name + ': ' + (response.ok ? 'uploaded' : await response.text()));
   }
   message.textContent = results.join(' / ');
   await Promise.all([refreshStatus(), refreshFiles()]);
@@ -533,12 +578,6 @@ byId('pin-form').addEventListener('submit', async (event) => {
 byId('data-file').addEventListener('change', (event) => {
   const input = /** @type {HTMLInputElement} */ (event.target);
   if (input.files && input.files[0]) uploadDataPack(input.files[0]).catch(() => undefined);
-  input.value = '';
-});
-
-byId('save-files').addEventListener('change', (event) => {
-  const input = /** @type {HTMLInputElement} */ (event.target);
-  if (input.files && input.files.length > 0) uploadSaves(input.files).catch(() => undefined);
   input.value = '';
 });
 

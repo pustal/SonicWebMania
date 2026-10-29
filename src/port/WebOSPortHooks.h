@@ -71,6 +71,15 @@ int WebOSPort_IsPlusEnabled(void);
  */
 void WebOSPort_OnLegacyStageLoad(int engineVersion);
 
+/**
+ * Whether the stage is shown mirrored and left/right swapped: Sonic Origins'
+ * Mirror mode, during play only (not on title screens or menus). Implemented
+ * in src/RetroSaves.cpp; called by the legacy cores' drawing (which mirrors
+ * the frame before the HUD and text are drawn) and the input code
+ * (patches/rsdk/0004).
+ */
+int WebOSPort_IsMirrored(void);
+
 #ifdef __cplusplus
 }
 #endif

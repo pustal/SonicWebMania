@@ -17,6 +17,7 @@
  * Replaces RSDKv5/main.cpp from the engine (excluded in cmake/RSDKPlatform-webOS.cmake).
  */
 #include "RSDK/Core/RetroEngine.hpp"
+#include "RetroSaves.h"
 
 // Sonic Mania is linked statically (GAME_STATIC), so its logic entry point
 // comes from the game's GameMain.h rather than from a loaded library.
@@ -239,7 +240,11 @@ int32 main(int32 argc, char *argv[])
     runtime.SetGames(BuildGameChoices(maniaReady, retroGames), game);
     runtime.Configure(serverRunning ? &server : nullptr, swm::FindLanAddress(), config.IsPlusEnabled(), &ReadAchievements);
 
+    // Sonic Origins' coins, shared by the retro games (listed with the saves on the web page).
+    swm::ConfigureRetroSession(storage.PathFor("RetroCoins.ini"));
+
     const int32 exitCode = RunEngine(engineArgc, engineArgv.data());
+    swm::FinishRetroSession();
     server.Stop();
 
     // Left normally: remember the game (or the one chosen in the menu) for the next launch.

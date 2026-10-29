@@ -99,8 +99,6 @@ public:
     static constexpr const char *kPackFolderName = "retro";
     /** Folder created at the top of a USB drive. */
     static constexpr const char *kUsbFolderName = "SonicWebMania";
-    /** Folder inside the data directory holding each game's working folder. */
-    static constexpr const char *kGamesFolderName = "games";
     /** Id used for Sonic Mania itself in menus, port.ini and --swm-game. */
     static constexpr const char *kManiaId = "mania";
 

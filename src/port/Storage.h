@@ -74,8 +74,10 @@ public:
     static std::uint64_t FileSize(const std::string &path);
 
     /**
-     * Moves files staged during the previous session into place. Called before
-     * the engine starts, so nothing has them open.
+     * Moves files staged during the previous session into place: a Data.rsdk,
+     * saves and settings for the data directory, and those staged under
+     * incoming/games/<id>/ for a retro game's folder. Called before the engine
+     * starts, so nothing has them open.
      *
      * @return Number of files applied.
      */
@@ -84,14 +86,24 @@ public:
     /** Truncates the engine log when it has grown past kMaxLogBytes. */
     void TrimLog() const;
 
-    /** Saves and settings that may be downloaded or replaced through the web page. */
-    std::vector<UserFile> ListUserFiles() const;
+    /**
+     * Saves and settings that may be downloaded or replaced through the web
+     * page: those of the data directory, or of @p subdir inside it (a retro
+     * game's working folder, "games/<id>").
+     */
+    std::vector<UserFile> ListUserFiles(const std::string &subdir = std::string()) const;
 
     /**
      * Whether @p name may be read or written through the web page: a plain
      * name (letters, digits, '-', '_') ending in .bin or .ini, never a path.
      */
     static bool IsAllowedUserFileName(const std::string &name);
+
+    /** Folder (inside the data directory) holding the retro games' working folders; see RetroLibrary. */
+    static constexpr const char *kGamesFolderName = "games";
+
+    /** True for a game id: lower-case letters and digits only, at most 32. */
+    static bool IsPlainName(const std::string &name);
 
 private:
     std::string root_;

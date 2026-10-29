@@ -29,14 +29,29 @@
  *     (with its save slots, Time Attack and extras), so the game goes there.
  * With the Origins packs, whose title starts games itself, the demo (attract
  * mode) is left alone.
+ *
+ * Sonic Origins' modes: its scripts read game.playMode (0 Classic,
+ * 1 Anniversary, 2 Boss Rush, 3 Mirror, ...) and game.coinMode (1: an extra
+ * life becomes a coin, NOTIFY_ADD_COIN, which the engine counts in
+ * game.coinCount). With the Origins packs the save screen starts with a mode
+ * page; the coin count is kept in a file shared by the three games, as Origins
+ * shares it; Mirror mode is done by the port (WebOSPort_IsMirrored): the
+ * legacy cores mirror the stage before drawing the HUD and text (patch 0004)
+ * and swap left and right; Boss Rush
+ * starts at the pack's first Boss Rush stage (folder "BR1...").
  */
 #include "RSDK/Core/RetroEngine.hpp"
+
+#include "RetroSaves.h"
 
 #include "port/PortRuntime.h"
 #include "port/SaveSelect.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <fstream>
+#include <stdexcept>
 #include <string>
 
 namespace
@@ -51,10 +66,50 @@ constexpr int kSpecialStageFlag = 0x80;
 /** A new game's values (the 2013 menu's). */
 constexpr int kNewLives = 3, kNewScoreBonus = 50000;
 
+/** Most coins Origins counts (its HUD has three digits). */
+constexpr int kMaxCoins = 999;
+/** Folder prefix of a pack's first Boss Rush stage. */
+constexpr const char *kBossRushFirstFolder = "BR1";
+
 constexpr const char *kTitleScene = "TITLE SCREEN";
 constexpr const char *kCdMenuScene = "MENU";
 /** The post-game stage list a cleared save continues at. */
 constexpr const char *kStageMenuScene = "STAGE MENU";
+
+/** One of Sonic Origins' modes, as the save screen offers it. */
+struct ModeInfo {
+    const char *name;
+    const char *description;
+    int playMode;  ///< game.playMode (the scripts' BOOT_PLAYMODE_* values).
+    bool coins;    ///< game.coinMode: extra lives become coins.
+    bool mirrored; ///< The port mirrors the picture and swaps left and right.
+    bool bossRush; ///< Starts at the first Boss Rush stage, without saving.
+};
+
+constexpr ModeInfo kModes[] = {
+    { "Anniversary", "Extra lives become coins, and there is no time limit.", 1, true, false, false },
+    { "Classic", "The original rules: lives and the 10-minute time limit.", 0, false, false, false },
+    // The scripts' own Mirror value (3) pre-flips text for a whole-picture flip;
+    // the port mirrors the stage under the HUD and text instead, so it plays
+    // with Anniversary's value.
+    { "Mirror", "Anniversary rules, with the stages mirrored.", 1, true, true, false },
+    { "Boss Rush", "The bosses one after another, without saving.", 2, true, false, true },
+};
+
+/** This session's state (the app runs one game per process). */
+struct Session {
+    const ModeInfo *mode = nullptr; ///< Null until a mode is chosen (and always for packs without modes).
+    bool mirrorActive    = false;   ///< Mirror mode and a stage is being played.
+    std::string coinsPath;          ///< Where the coin count is kept ("" = not kept).
+    int coins        = 0;
+    bool coinsLoaded = false;       ///< game.coinCount was set from the file.
+};
+
+Session &State()
+{
+    static Session session;
+    return session;
+}
 
 /** Removes leading and trailing blanks (scene names are padded). */
 std::string Trim(const std::string &text)
@@ -146,12 +201,108 @@ std::vector<swm::RetroCharacter> Characters()
     return characters;
 }
 
+/** True for packs with Sonic Origins' modes. */
+bool HasOriginsModes() { return GlobalExists("game.playMode"); }
+
+/** The mode page's entries. */
+std::vector<swm::RetroMode> ModeList()
+{
+    std::vector<swm::RetroMode> modes;
+    for (const ModeInfo &mode : kModes)
+        modes.push_back(swm::RetroMode{ mode.name, mode.description, !mode.bossRush });
+    return modes;
+}
+
+/** Sets the globals of mode @p index (see kModes) and remembers it for mirroring. */
+void ApplyMode(int index)
+{
+    const ModeInfo &mode = kModes[std::clamp(index, 0, static_cast<int>(sizeof(kModes) / sizeof(kModes[0])) - 1)];
+    RSDK::Legacy::SetGlobalVariableByName("game.playMode", mode.playMode);
+    RSDK::Legacy::SetGlobalVariableByName("game.coinMode", mode.coins ? 1 : 0);
+    State().mode = &mode;
+    std::printf("SonicWebMania: %s mode\n", mode.name);
+    std::fflush(stdout);
+}
+
+/** Absolute list position of the first Boss Rush stage, or -1. */
+int FindBossRushStart()
+{
+    const RSDK::SceneListInfo &list = RSDK::sceneInfo.listCategory[RSDK::Legacy::STAGELIST_BONUS];
+    for (int i = 0; i < list.sceneCount; ++i) {
+        const std::string folder = RSDK::sceneInfo.listData[list.sceneOffsetStart + i].folder;
+        if (folder.compare(0, std::char_traits<char>::length(kBossRushFirstFolder), kBossRushFirstFolder) == 0)
+            return list.sceneOffsetStart + i;
+    }
+    return -1;
+}
+
+/** Starts Boss Rush. @return False if the pack has no Boss Rush stages. */
+bool StartBossRush()
+{
+    const int start = FindBossRushStart();
+    if (start < 0)
+        return false;
+    RSDK::sceneInfo.activeCategory = RSDK::Legacy::STAGELIST_BONUS;
+    RSDK::sceneInfo.listPos        = start;
+    return true;
+}
+
+/** Key of the coin count in its file ("coins=42"). */
+constexpr const char *kCoinsKey = "coins=";
+
+/** Reads the coin count file (0 when missing or unreadable). */
+int ReadCoins(const std::string &path)
+{
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.compare(0, std::char_traits<char>::length(kCoinsKey), kCoinsKey) != 0)
+            continue;
+        try {
+            return std::clamp(std::stoi(line.substr(std::char_traits<char>::length(kCoinsKey))), 0, kMaxCoins);
+        }
+        catch (const std::exception &) {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Keeps game.coinCount and the coin file in step: the first stage load sets
+ * the count from the file, later ones (and FinishRetroSession) write it back
+ * when the game changed it.
+ */
+void SyncCoins()
+{
+    Session &session = State();
+    if (session.coinsPath.empty() || !GlobalExists("game.coinCount"))
+        return;
+
+    if (!session.coinsLoaded) {
+        session.coins = ReadCoins(session.coinsPath);
+        RSDK::Legacy::SetGlobalVariableByName("game.coinCount", session.coins);
+        session.coinsLoaded = true;
+        return;
+    }
+    const int now = std::clamp(RSDK::Legacy::GetGlobalVariableByName("game.coinCount"), 0, kMaxCoins);
+    if (now == session.coins)
+        return;
+    session.coins = now;
+    std::ofstream out(session.coinsPath, std::ios::trunc);
+    out << "; Sonic Origins coins, shared by the retro games (SonicWebMania)\n" << kCoinsKey << now << '\n';
+    if (!out)
+        std::fprintf(stderr, "SonicWebMania: could not write %s\n", session.coinsPath.c_str());
+}
+
 /** Reads the save memory into what the save screen shows. */
 swm::SaveSelectRequest BuildRequest()
 {
     swm::SaveSelectRequest request;
     request.title      = RSDK::gameVerInfo.gameTitle;
     request.characters = Characters();
+    if (HasOriginsModes())
+        request.modes = ModeList();
 
     const RSDK::SceneListInfo &regular = RSDK::sceneInfo.listCategory[RSDK::Legacy::STAGELIST_REGULAR];
     for (int s = 0; s < swm::kSaveSlotCount; ++s) {
@@ -231,6 +382,14 @@ void ContinueSlot(int slot)
     }
 }
 
+/** Back to the title screen (the save screen was cancelled). */
+void GoToTitle()
+{
+    const int title = FindScene(RSDK::Legacy::STAGELIST_PRESENTATION, kTitleScene);
+    RSDK::sceneInfo.activeCategory = RSDK::Legacy::STAGELIST_PRESENTATION;
+    RSDK::sceneInfo.listPos        = title >= 0 ? title : RSDK::sceneInfo.listCategory[0].sceneOffsetStart;
+}
+
 /** Sonic 1 and 2: the save screen, then its choice. */
 void RunSaveScreen()
 {
@@ -245,16 +404,12 @@ void RunSaveScreen()
     }
 
     switch (result.action) {
-        case swm::SaveSelectAction::Cancel: {
-            // Back to the title screen.
-            const int title = FindScene(RSDK::Legacy::STAGELIST_PRESENTATION, kTitleScene);
-            RSDK::sceneInfo.activeCategory = RSDK::Legacy::STAGELIST_PRESENTATION;
-            RSDK::sceneInfo.listPos        = title >= 0 ? title : RSDK::sceneInfo.listCategory[0].sceneOffsetStart;
-            break;
-        }
+        case swm::SaveSelectAction::Cancel: GoToTitle(); break;
         case swm::SaveSelectAction::NoSave:
             SetNewGameGlobals(0, false);
             RSDK::Legacy::v4::playerListPos = result.character;
+            if (HasOriginsModes() && kModes[result.mode].bossRush && !StartBossRush())
+                std::fprintf(stderr, "SonicWebMania: this pack has no Boss Rush stages\n");
             break;
         case swm::SaveSelectAction::NewGame: {
             int *values           = Slot(result.slot);
@@ -272,6 +427,8 @@ void RunSaveScreen()
         }
         case swm::SaveSelectAction::Continue: ContinueSlot(result.slot); break;
     }
+    if (result.action != swm::SaveSelectAction::Cancel && HasOriginsModes())
+        ApplyMode(result.mode);
     if (changed && !RSDK::Legacy::WriteSaveRAM())
         std::fprintf(stderr, "SonicWebMania: could not write the save file\n");
 }
@@ -285,6 +442,33 @@ bool GoToCdMenu()
     RSDK::sceneInfo.activeCategory = RSDK::Legacy::STAGELIST_PRESENTATION;
     RSDK::sceneInfo.listPos        = menu;
     return true;
+}
+
+/**
+ * Sonic CD: with the Origins pack, the mode page first (the 2011 menu has
+ * the save slots); Boss Rush starts at its first stage instead of the menu.
+ */
+void RunCdStart()
+{
+    if (HasOriginsModes()) {
+        swm::SaveSelectRequest request;
+        request.title        = RSDK::gameVerInfo.gameTitle;
+        request.modes        = ModeList();
+        request.slotsEnabled = false; // The 2011 menu has them.
+        const swm::SaveSelectResult result = swm::PortRuntime::Instance().RunSaveSelect(request);
+        if (result.action == swm::SaveSelectAction::Cancel) {
+            GoToTitle();
+            return;
+        }
+        ApplyMode(result.mode);
+        if (kModes[result.mode].bossRush) {
+            RSDK::Legacy::SetGlobalVariableByName("Options.AttractMode", 0);
+            if (StartBossRush())
+                return;
+            std::fprintf(stderr, "SonicWebMania: this pack has no Boss Rush stages\n");
+        }
+    }
+    GoToCdMenu();
 }
 
 } // namespace
@@ -308,9 +492,31 @@ extern "C" void WebOSPort_OnLegacyStageLoad(int engineVersion)
         if (engineVersion == 4)
             RunSaveScreen();
         else if (engineVersion == 3)
-            GoToCdMenu();
+            RunCdStart();
     }
+    SyncCoins();
 
     previousCategory = RSDK::sceneInfo.activeCategory;
     previousName     = SceneName(RSDK::sceneInfo.listPos);
+
+    // Mirror the stages being played, not the title screen or menus.
+    Session &session     = State();
+    session.mirrorActive = session.mode && session.mode->mirrored
+                           && RSDK::sceneInfo.activeCategory != RSDK::Legacy::STAGELIST_PRESENTATION;
 }
+
+extern "C" int WebOSPort_IsMirrored(void) { return State().mirrorActive ? 1 : 0; }
+
+namespace swm
+{
+
+void ConfigureRetroSession(const std::string &coinsPath) { State().coinsPath = coinsPath; }
+
+void FinishRetroSession()
+{
+    // Coins collected since the last stage load.
+    if (State().coinsLoaded)
+        SyncCoins();
+}
+
+} // namespace swm

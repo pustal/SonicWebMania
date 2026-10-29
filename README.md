@@ -2,15 +2,15 @@
 
 # SonicWebMania
 
-**Version 1.2.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+**Version 1.3.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
 and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations,
 built as a **native** webOS app (SDL2), with a few TV-friendly extras:
 
 - **Bring your own data, from your phone.** On first launch the TV shows an address and
   a PIN. Open it on any phone or computer on the same network and upload the `Data.rsdk`
   from your own copy of the game. No USB stick or SSH needed.
-- **Save transfer.** The same page lists your saves for download, and lets you upload
-  saves from another device.
+- **Save transfer.** The same page lists your saves (Sonic Mania's and each retro
+  game's) for download, and lets you upload saves from another device.
 - **Plays with the remote.** Controllers work as usual; the remote is mapped too (below).
 - **Back opens a small menu** at any time: Resume, Achievements, Button test, Retro games
   (when enabled), Restart game, Close app. It also shows the transfer address and this
@@ -109,6 +109,20 @@ How each game plays depends on what you upload:
   by itself (those releases used native menus), so for them the save screen opens when
   the title would start its demo. Sonic CD goes to its own 2011 menu instead: its save
   slots, Time Attack and extras.
+- **Sonic Origins' modes.** With the Origins packs the save screen starts with a mode:
+  - **Anniversary**: extra lives become coins, no time limit;
+  - **Classic**: lives and the 10-minute time limit (and, in Sonic 1, no spin dash);
+  - **Mirror**: Anniversary rules with the stages mirrored and left/right swapped (the HUD
+    and title cards stay readable);
+  - **Boss Rush** (experimental): the bosses one after another, without saving; a defeat
+    retries the fight. Moving on to the next boss is untested.
+
+  Coins are kept in `RetroCoins.ini` in the app's data folder, shared by the three games as
+  in Origins. Missions, the Museum and Story mode are part of Origins' own program, not of
+  its packs, so they are not available.
+- **Saves on the transfer page.** Saves and settings are listed per game (Sonic Mania,
+  Sonic 1, 2 and CD) for download and upload. A retro game's files download as
+  `<game>-<file>` (`sonic1-SGame.bin`) and can be uploaded under either name.
 - **Storage.** The page offers each USB drive and the TV; a USB drive is chosen first, to
   spare the TV's space. Packs go in a `SonicWebMania/retro` folder on the drive (the page can
   create it), named `<game>-origins.rsdk` and `<game>-classic.rsdk` (`sonic1`, `sonic2`,
@@ -116,7 +130,8 @@ How each game plays depends on what you upload:
 - **Sonic CD's 2011 pack** uses an older format. The TV converts it on upload, which needs
   room for a second copy (about 75 MiB) for a moment. `tools/rsdk_v3_convert.py` does the
   same on a computer.
-- Each game keeps its own settings and saves in `games/<game>/` in the app's data folder.
+- Each game keeps its own settings and saves (`SGame.bin`) in `games/<game>/` in the
+  app's data folder.
 - Sonic 3 & Knuckles from Origins cannot be played: its game code lives in the Origins
   program, not in its pack.
 - The engine changes this needed are in `patches/rsdk/0002-retro-games.patch`:
@@ -125,7 +140,8 @@ How each game plays depends on what you upload:
   - the 2013 packs' (RSDKvB) encryption keys;
   - Ogg sound effects, which the 2013 packs use and the engine could only read as `.wav`.
   `patches/rsdk/0003-retro-save-screen-hook.patch` calls the port when a legacy stage
-  loads, for the save screen.
+  loads, for the save screen; `0004-retro-mirror-mode.patch` mirrors the stage before
+  the HUD is drawn and swaps left and right in Mirror mode.
 
 ## Disk space
 
@@ -208,7 +224,7 @@ Escape opens the port menu on a keyboard.
 
 ```
 src/main.cpp                launcher: storage, transfer server, setup screen, picks the game, then the engine
-src/RetroSaves.cpp          retro save slots: reads/writes the games' save memory, runs the save screen
+src/RetroSaves.cpp          retro games' save slots, Origins modes, coins and Mirror mode (engine side)
 src/port/
   WebOSPortHooks.h          the C interface the engine calls (5 functions)
   PortRuntime.*             implements the hooks: Back menu (achievements, button test,
@@ -228,7 +244,8 @@ src/port/
   BitmapFont.* TextRenderer.cpp   built-in 8x8 font, so text works before any game data exists
 web/index.html              the transfer page, embedded into the binary at build time
 patches/rsdk/               engine patches, applied by scripts/apply-patches.sh: 0001 hook call sites in the
-                            SDL2 device + the Plus gate; 0002 retro games; 0003 save screen hook (see Retro games)
+                            SDL2 device + the Plus gate; 0002 retro games; 0003 save screen hook;
+                            0004 Mirror mode (see Retro games)
 tools/                      rsdk_table.py (compare pack contents), rsdk_v3_convert.py (Sonic CD 2011 pack)
 cmake/WriteManifest.cmake       Homebrew Channel manifest for each release
 scripts/make-icon.py        draws the app icon (original pixel art)

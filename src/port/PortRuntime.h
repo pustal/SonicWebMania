@@ -63,8 +63,9 @@ public:
     const std::string &NextGame() const { return nextGame_.empty() ? currentGame_ : nextGame_; }
 
     /**
-     * Shows the save screen (no save, four slots with continue/new game/delete,
-     * then the character) over the frozen frame, and blocks the engine's main
+     * Shows the save screen (the mode, then no save or four slots with
+     * continue/new game/delete, then the character; see SaveSelect.h for which
+     * pages a request has) over the frozen frame, and blocks the engine's main
      * thread until the player chooses. Called from src/RetroSaves.cpp when a
      * retro game leaves its title screen.
      *
@@ -85,7 +86,7 @@ private:
     enum class MenuItem { Resume, Achievements, ButtonTest, Games, Restart, Close };
 
     /** Which page of the menu is showing (the last three are the save screen's). */
-    enum class Screen { Main, Achievements, ButtonTest, Games, SaveSlots, SlotActions, Characters };
+    enum class Screen { Main, Achievements, ButtonTest, Games, Modes, SaveSlots, SlotActions, Characters };
 
     /** Entries of the slot actions page, in display order. */
     enum class SlotAction { Continue, Delete, Back };
@@ -105,9 +106,19 @@ private:
     void RunModal(Screen first);
 
     /** Navigation on the save screen's pages. @return True when the screen should close. */
+    bool HandleModesAction(MenuAction action);
     bool HandleSaveSlotsAction(MenuAction action);
     bool HandleSlotActionsAction(MenuAction action);
     bool HandleCharactersAction(MenuAction action);
+
+    /**
+     * Moves on from the mode page: to the slots when the chosen mode saves,
+     * else to the character page, else closes. @return True when the screen closed.
+     */
+    bool AfterModeChosen();
+
+    /** Goes back one page from the slot or character page (closing from the first page). @return True when closed. */
+    bool BackFromPage();
 
     /** Closes the save screen with @p action. @return True (for the handlers above). */
     bool FinishSaveSelect(SaveSelectAction action, int slot, int character);
@@ -144,6 +155,7 @@ private:
     void DrawAchievementsPage(int width, int height, int scale) const;
     void DrawButtonTestPage(int width, int height, int scale) const;
     void DrawGamesPage(int width, int height, int scale) const;
+    void DrawModesPage(int width, int height, int scale) const;
     void DrawSaveSlotsPage(int width, int height, int scale) const;
     void DrawSlotActionsPage(int width, int height, int scale) const;
     void DrawCharactersPage(int width, int height, int scale) const;
@@ -192,6 +204,7 @@ private:
     int slotActionSelected_   = 0;
     bool deleteArmed_         = false; ///< "Delete" was pressed once; a second press deletes.
     int characterSelected_    = 0;
+    int modeSelected_         = 0;
 
     bool menuOpen_         = false;
     Screen screen_         = Screen::Main;
