@@ -8,7 +8,7 @@
 # See README.md for the full walkthrough.
 
 cmake_minimum_required(VERSION 3.21)
-project(SonicWebMania VERSION 1.4.0 LANGUAGES C CXX)
+project(SonicWebMania VERSION 2.0.0 LANGUAGES C CXX)
 
 set(SWM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${SWM_ROOT}/cmake")
