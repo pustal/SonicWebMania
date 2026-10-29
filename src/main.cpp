@@ -241,7 +241,7 @@ int32 main(int32 argc, char *argv[])
     runtime.Configure(serverRunning ? &server : nullptr, swm::FindLanAddress(), config.IsPlusEnabled(), &ReadAchievements);
 
     // Sonic Origins' coins, shared by the retro games (listed with the saves on the web page).
-    swm::ConfigureRetroSession(storage.PathFor("RetroCoins.ini"));
+    swm::ConfigureRetroSession(storage.PathFor("RetroCoins.ini"), game);
 
     const int32 exitCode = RunEngine(engineArgc, engineArgv.data());
     swm::FinishRetroSession();

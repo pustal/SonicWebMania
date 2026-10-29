@@ -1,0 +1,59 @@
+diff --git a/RSDKv5/RSDK/Storage/Legacy/UserStorageLegacy.cpp b/RSDKv5/RSDK/Storage/Legacy/UserStorageLegacy.cpp
+index a5d5d7c..f88842b 100644
+--- a/RSDKv5/RSDK/Storage/Legacy/UserStorageLegacy.cpp
++++ b/RSDKv5/RSDK/Storage/Legacy/UserStorageLegacy.cpp
+@@ -1,3 +1,7 @@
++// webOS port: achievements (see src/port/WebOSPortHooks.h)
++#if RETRO_WEBOS_PORT
++#include "WebOSPortHooks.h"
++#endif
+ 
+ 
+ void *RSDK::Legacy::nativeFunction[LEGACY_v4_NATIIVEFUNCTION_COUNT];
+@@ -41,7 +45,15 @@ bool32 RSDK::Legacy::WriteSaveRAM() { return SKU::SaveUserFile("SGame.bin", save
+ void RSDK::Legacy::v3::SetAchievement(int32 achievementID, int32 achievementDone)
+ {
+     PrintLog(PRINT_NORMAL, "[RSDKv3] Achieved achievement: %d (%d)!", achievementID, achievementDone);
++#if RETRO_WEBOS_PORT
++    // (webOS port) Record it in the game's list and save it.
++    WebOSPort_OnLegacyAchievement(achievementID, achievementDone);
++#endif
+ }
++#if RETRO_WEBOS_PORT
++void RSDK::Legacy::v3::LoadAchievementsMenu() { WebOSPort_ShowLegacyAchievements(); }
++void RSDK::Legacy::v3::LoadLeaderboardsMenu() { WebOSPort_ShowLegacyLeaderboards(); }
++#endif
+ void RSDK::Legacy::v3::SetLeaderboard(int32 leaderboardID, int32 score)
+ {
+     PrintLog(PRINT_NORMAL, "[RSDKv3] Setting Leaderboard %d score to %d...", leaderboardID, score);
+@@ -56,6 +68,11 @@ void RSDK::Legacy::v4::SetAchievement(int32 *achievementID, int32 *status)
+ 
+     PrintLog(PRINT_NORMAL, "[RSDKv4] Achieved achievement: %d (%d)!", *achievementID, *status);
+ 
++#if RETRO_WEBOS_PORT
++    // (webOS port) Record it in the game's list and save it.
++    WebOSPort_OnLegacyAchievement(*achievementID, *status);
++    return;
++#endif
+     if ((uint32)*achievementID >= achievementList.size())
+         return;
+ 
+diff --git a/RSDKv5/RSDK/Storage/Legacy/UserStorageLegacy.hpp b/RSDKv5/RSDK/Storage/Legacy/UserStorageLegacy.hpp
+index 480f298..4542170 100644
+--- a/RSDKv5/RSDK/Storage/Legacy/UserStorageLegacy.hpp
++++ b/RSDKv5/RSDK/Storage/Legacy/UserStorageLegacy.hpp
+@@ -43,8 +43,14 @@ namespace v3
+ 
+ void SetAchievement(int32 achievementID, int32 achievementDone);
+ void SetLeaderboard(int32 leaderboardID, int32 score);
++#if RETRO_WEBOS_PORT
++// (webOS port) Sonic CD's menu entries open the port's achievement list / a notice.
++void LoadAchievementsMenu();
++void LoadLeaderboardsMenu();
++#else
+ inline void LoadAchievementsMenu() {}
+ inline void LoadLeaderboardsMenu() {}
++#endif
+ 
+ } // namespace v3
+ 

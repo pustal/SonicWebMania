@@ -2,7 +2,7 @@
 
 # SonicWebMania
 
-**Version 1.3.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+**Version 1.4.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
 and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations,
 built as a **native** webOS app (SDL2), with a few TV-friendly extras:
 
@@ -115,11 +115,18 @@ How each game plays depends on what you upload:
   - **Mirror**: Anniversary rules with the stages mirrored and left/right swapped (the HUD
     and title cards stay readable);
   - **Boss Rush** (experimental): the bosses one after another, without saving; a defeat
-    retries the fight. Moving on to the next boss is untested.
+    retries the fight. Sonic 1's Boss Rush stages are whole acts, so, as Origins does,
+    the port starts you at the act's last checkpoint, next to the boss. Moving on to the
+    next boss is untested.
 
   Coins are kept in `RetroCoins.ini` in the app's data folder, shared by the three games as
   in Origins. Missions, the Museum and Story mode are part of Origins' own program, not of
   its packs, so they are not available.
+- **Achievements.** Each game has its own twelve achievements (those of the 2013 and
+  2011 releases, which the Origins packs share), unlocked as you play: a notice shows
+  each one, the Back menu's Achievements page lists them, and they are kept in the game's
+  `Achievements.bin`. Sonic CD's own menu entry opens the same list (its Leaderboards
+  entry needs an online service, so it only says so).
 - **Saves on the transfer page.** Saves and settings are listed per game (Sonic Mania,
   Sonic 1, 2 and CD) for download and upload. A retro game's files download as
   `<game>-<file>` (`sonic1-SGame.bin`) and can be uploaded under either name.
@@ -140,8 +147,10 @@ How each game plays depends on what you upload:
   - the 2013 packs' (RSDKvB) encryption keys;
   - Ogg sound effects, which the 2013 packs use and the engine could only read as `.wav`.
   `patches/rsdk/0003-retro-save-screen-hook.patch` calls the port when a legacy stage
-  loads, for the save screen; `0004-retro-mirror-mode.patch` mirrors the stage before
-  the HUD is drawn and swaps left and right in Mirror mode.
+  loads (the save screen) and once it has loaded (Boss Rush checkpoints);
+  `0004-retro-mirror-mode.patch` mirrors the stage before the HUD is drawn and swaps left
+  and right in Mirror mode; `0005-retro-achievements.patch` passes the games' achievement
+  unlocks and Sonic CD's achievement menu to the port.
 
 ## Disk space
 
@@ -231,6 +240,7 @@ src/port/
                             retro games), notifications, Plus opt-in
   RetroGames.*              Sonic 1, 2 and CD: finds their packs, plans Origins + classic, per-game folders
   SaveSelect.h              what the retro games' save screen shows and returns
+  RetroAchievements.*       the retro games' achievement lists
   RsdkPack.*                looks inside packs; converts Sonic CD's 2011 pack
   Md5.*                     MD5 for pack file names
   UsbDrives.*               mounted USB drives (from /proc/mounts)
@@ -245,10 +255,10 @@ src/port/
 web/index.html              the transfer page, embedded into the binary at build time
 patches/rsdk/               engine patches, applied by scripts/apply-patches.sh: 0001 hook call sites in the
                             SDL2 device + the Plus gate; 0002 retro games; 0003 save screen hook;
-                            0004 Mirror mode (see Retro games)
+                            0004 Mirror mode; 0005 retro achievements (see Retro games)
 tools/                      rsdk_table.py (compare pack contents), rsdk_v3_convert.py (Sonic CD 2011 pack)
 cmake/WriteManifest.cmake       Homebrew Channel manifest for each release
-scripts/make-icon.py        draws the app icon (original pixel art)
+scripts/make-icon.py        draws the app icon and README logo (original pixel art with the name)
 cmake/RSDKPlatform-webOS.cmake   RSDK platform file (SDL2 backend, our main, static libstdc++)
 cmake/SDL2WebOSBackport.cmake    bundles webosbrew's SDL-webOS 2.30 (remote keys, Back/Exit delivery)
 external/                   submodules: engine, game, cpp-httplib, libogg, libtheora

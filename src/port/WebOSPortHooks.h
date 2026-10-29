@@ -72,6 +72,14 @@ int WebOSPort_IsPlusEnabled(void);
 void WebOSPort_OnLegacyStageLoad(int engineVersion);
 
 /**
+ * Called by the RSDKv4 core right after a stage's files and objects have
+ * loaded (patches/rsdk/0003). Implemented in src/RetroSaves.cpp: in Boss
+ * Rush, the players start at the stage's last checkpoint, next to the boss,
+ * as Sonic Origins starts them.
+ */
+void WebOSPort_OnLegacyStageLoaded(int engineVersion);
+
+/**
  * Whether the stage is shown mirrored and left/right swapped: Sonic Origins'
  * Mirror mode, during play only (not on title screens or menus). Implemented
  * in src/RetroSaves.cpp; called by the legacy cores' drawing (which mirrors
@@ -79,6 +87,20 @@ void WebOSPort_OnLegacyStageLoad(int engineVersion);
  * (patches/rsdk/0004).
  */
 int WebOSPort_IsMirrored(void);
+
+/**
+ * The legacy cores' SetAchievement (patches/rsdk/0004): achievement @p id of
+ * the running retro game was reached (@p status non-zero). Implemented in
+ * src/RetroSaves.cpp: marks it in the game's list, saves Achievements.bin and
+ * shows a notice.
+ */
+void WebOSPort_OnLegacyAchievement(int id, int status);
+
+/** Sonic CD's menu asked for the achievement list (patches/rsdk/0004); opens the Back menu's page. */
+void WebOSPort_ShowLegacyAchievements(void);
+
+/** Sonic CD's menu asked for the leaderboards, which need an online service (patches/rsdk/0004). */
+void WebOSPort_ShowLegacyLeaderboards(void);
 
 #ifdef __cplusplus
 }

@@ -242,6 +242,22 @@ SaveSelectResult PortRuntime::RunSaveSelect(const SaveSelectRequest &request)
     return saveResult_;
 }
 
+void PortRuntime::ShowAchievements()
+{
+    achievements_        = achievementProvider_ ? achievementProvider_() : std::vector<AchievementEntry>{};
+    achievementSelected_ = 0;
+    achievementTop_      = 0;
+    achievementsOnly_    = true;
+    RunModal(Screen::Achievements);
+    achievementsOnly_ = false;
+}
+
+void PortRuntime::Notify(const std::string &text)
+{
+    toastText_       = text;
+    toastUntilTicks_ = SDL_GetTicks() + kToastDurationMs;
+}
+
 void PortRuntime::RunModal(Screen first)
 {
     if (menuOpen_ || !redraw_)
@@ -392,7 +408,12 @@ void PortRuntime::HandleAchievementsAction(MenuAction action)
                 achievementSelected_ = (achievementSelected_ + 1) % count;
             break;
         case MenuAction::Cancel:
-        case MenuAction::Confirm: screen_ = Screen::Main; return;
+        case MenuAction::Confirm:
+            if (achievementsOnly_)
+                menuOpen_ = false; // Opened on its own: back to the game.
+            else
+                screen_ = Screen::Main;
+            return;
         case MenuAction::None: return;
     }
 
@@ -701,7 +722,7 @@ void PortRuntime::DrawAchievementsPage(int width, int height, int scale) const
     const int pad      = 8 * scale;
     const int panelW   = std::min(width - 8 * scale, 52 * glyph);
     const int maxChars = (panelW - 2 * pad) / glyph;
-    const int panelH   = lineGap * (kAchievementRows + 6) + pad;
+    const int panelH   = lineGap * (kAchievementRows + 7) + pad; // Room for a two-line description above the footer.
     const SDL_Rect panel = DrawPanel(width, height, panelW, panelH, scale);
 
     const int unlocked = static_cast<int>(

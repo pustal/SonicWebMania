@@ -38,19 +38,33 @@
  * shares it; Mirror mode is done by the port (WebOSPort_IsMirrored): the
  * legacy cores mirror the stage before drawing the HUD and text (patch 0004)
  * and swap left and right; Boss Rush
- * starts at the pack's first Boss Rush stage (folder "BR1...").
+ * starts at the pack's first Boss Rush stage (folder "BR1..."). Each Boss
+ * Rush stage is a whole act: Origins starts the players at its last
+ * checkpoint, before the boss, by setting lampPostID (the lamp post's object
+ * then moves the players to itself when the stage loads, also when retrying);
+ * the port sets it once the stage's objects have loaded and loads the stage
+ * again (WebOSPort_OnLegacyStageLoaded).
+ *
+ * Achievements: the engine registers Sonic Mania's list at start-up; for a
+ * retro game it is replaced with that game's (port/RetroAchievements.h) and
+ * the game folder's Achievements.bin is read into it. The scripts' unlocks
+ * (WebOSPort_OnLegacyAchievement) mark the list, save the file and show a
+ * notice; Sonic CD's menu gets its Achievements entry back (it is offered
+ * when engine.onlineActive is set) and opens the Back menu's list.
  */
 #include "RSDK/Core/RetroEngine.hpp"
 
 #include "RetroSaves.h"
 
 #include "port/PortRuntime.h"
+#include "port/RetroAchievements.h"
 #include "port/SaveSelect.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 
@@ -68,8 +82,11 @@ constexpr int kNewLives = 3, kNewScoreBonus = 50000;
 
 /** Most coins Origins counts (its HUD has three digits). */
 constexpr int kMaxCoins = 999;
-/** Folder prefix of a pack's first Boss Rush stage. */
+/** Folder prefix of a pack's first Boss Rush stage, and of every Boss Rush stage. */
 constexpr const char *kBossRushFirstFolder = "BR1";
+constexpr const char *kBossRushFolderPrefix = "BR";
+/** Objects that are checkpoints, by type name without spaces (Sonic 1: lamp posts, Sonic 2: star posts). */
+constexpr const char *kCheckpointTypes[] = { "LampPost", "StarPost" };
 
 constexpr const char *kTitleScene = "TITLE SCREEN";
 constexpr const char *kCdMenuScene = "MENU";
@@ -101,6 +118,8 @@ struct Session {
     const ModeInfo *mode = nullptr; ///< Null until a mode is chosen (and always for packs without modes).
     bool mirrorActive    = false;   ///< Mirror mode and a stage is being played.
     std::string coinsPath;          ///< Where the coin count is kept ("" = not kept).
+    std::string gameId;             ///< The retro game being played ("" for Sonic Mania).
+    bool achievementsInstalled = false; ///< The game's achievement list replaced Sonic Mania's.
     int coins        = 0;
     bool coinsLoaded = false;       ///< game.coinCount was set from the file.
 };
@@ -293,6 +312,36 @@ void SyncCoins()
     out << "; Sonic Origins coins, shared by the retro games (SonicWebMania)\n" << kCoinsKey << now << '\n';
     if (!out)
         std::fprintf(stderr, "SonicWebMania: could not write %s\n", session.coinsPath.c_str());
+}
+
+/** Size of Achievements.bin: one 32-bit flag per achievement, as the engine writes it. */
+constexpr int kAchievementSlots = 0x100;
+
+/**
+ * Replaces Sonic Mania's achievement list (registered by the engine at
+ * start-up) with the retro game's, unlocked as the game folder's
+ * Achievements.bin says.
+ */
+void InstallAchievements()
+{
+    Session &session = State();
+    if (session.achievementsInstalled)
+        return;
+    session.achievementsInstalled = true;
+
+    const std::vector<swm::RetroAchievement> &list = swm::RetroAchievementsFor(session.gameId);
+    int32 saved[kAchievementSlots] = {};
+    RSDK::SKU::LoadUserFile("Achievements.bin", saved, sizeof(saved));
+
+    RSDK::achievementList.clear();
+    for (std::size_t i = 0; i < list.size() && i < static_cast<std::size_t>(kAchievementSlots); ++i) {
+        RSDK::AchievementInfo info;
+        info.identifier  = list[i].name;
+        info.name        = list[i].name;
+        info.description = list[i].description;
+        info.achieved    = saved[i] != 0;
+        RSDK::achievementList.push_back(info);
+    }
 }
 
 /** Reads the save memory into what the save screen shows. */
@@ -488,6 +537,12 @@ extern "C" void WebOSPort_OnLegacyStageLoad(int engineVersion)
     const bool demo             = titleStartsGames
                       && RSDK::Legacy::GetGlobalVariableByName(engineVersion == 3 ? "Options.AttractMode" : "options.attractMode") != 0;
 
+    InstallAchievements();
+    // Sonic CD's menu offers its Achievements and Leaderboards entries only
+    // with an online service; the port answers them itself.
+    if (engineVersion == 3)
+        RSDK::Legacy::onlineActive = true;
+
     if (fromTitle && toZone && !demo) {
         if (engineVersion == 4)
             RunSaveScreen();
@@ -505,12 +560,81 @@ extern "C" void WebOSPort_OnLegacyStageLoad(int engineVersion)
                            && RSDK::sceneInfo.activeCategory != RSDK::Legacy::STAGELIST_PRESENTATION;
 }
 
+extern "C" void WebOSPort_OnLegacyStageLoaded(int engineVersion)
+{
+    using namespace RSDK::Legacy;
+    const Session &session = State();
+    if (engineVersion != 4 || !session.mode || !session.mode->bossRush)
+        return;
+    const std::string folder = RSDK::sceneInfo.listData[RSDK::sceneInfo.listPos].folder;
+    if (RSDK::sceneInfo.activeCategory != STAGELIST_BONUS || folder.compare(0, 2, kBossRushFolderPrefix) != 0)
+        return;
+    if (GetGlobalVariableByName("lampPostID") != 0)
+        return; // A retry: the checkpoint already brings the players back.
+
+    // The checkpoint furthest along the stage (the bosses wait at the end),
+    // if it is ahead of where the stage starts the player: Sonic 1's Boss Rush
+    // stages are whole acts, Sonic 2's already start next to the boss.
+    const int32 start = v4::objectEntityList[0].xpos;
+    int checkpoint    = -1;
+    for (int e = 0; e < LEGACY_v4_TEMPENTITY_START; ++e) {
+        const v4::Entity &entity = v4::objectEntityList[e];
+        if (!entity.type)
+            continue;
+        std::string type = v4::typeNames[entity.type];
+        type.erase(std::remove(type.begin(), type.end(), ' '), type.end());
+        const bool isCheckpoint = std::any_of(std::begin(kCheckpointTypes), std::end(kCheckpointTypes),
+                                              [&type](const char *name) { return type == name; });
+        if (isCheckpoint && (checkpoint < 0 || entity.xpos > v4::objectEntityList[checkpoint].xpos))
+            checkpoint = e;
+    }
+    std::printf("SonicWebMania: Boss Rush start x %d, last checkpoint x %d\n", start >> 16,
+                checkpoint >= 0 ? v4::objectEntityList[checkpoint].xpos >> 16 : -1);
+    std::fflush(stdout);
+    if (checkpoint < 0 || v4::objectEntityList[checkpoint].xpos <= start)
+        return;
+
+    // Load the stage once more, as after a defeat: the checkpoint then places
+    // the players and the camera starts there (moving the players now would
+    // leave the camera to scroll across the whole act).
+    SetGlobalVariableByName("lampPostID", checkpoint);
+    SetGlobalVariableByName("starPostID", checkpoint);
+    stageMode = STAGEMODE_LOAD;
+}
+
 extern "C" int WebOSPort_IsMirrored(void) { return State().mirrorActive ? 1 : 0; }
+
+extern "C" void WebOSPort_OnLegacyAchievement(int id, int status)
+{
+    InstallAchievements();
+    if (id < 0 || id >= static_cast<int>(RSDK::achievementList.size()) || !status)
+        return;
+    RSDK::AchievementInfo &achievement = RSDK::achievementList[static_cast<std::size_t>(id)];
+    if (achievement.achieved)
+        return;
+
+    achievement.achieved = true;
+    RSDK::SKU::SaveUserData(); // Achievements.bin in the game's folder.
+    std::printf("SonicWebMania: achievement unlocked: %s\n", achievement.name.c_str());
+    std::fflush(stdout);
+    swm::PortRuntime::Instance().Notify("Achievement unlocked: " + achievement.name);
+}
+
+extern "C" void WebOSPort_ShowLegacyAchievements(void) { swm::PortRuntime::Instance().ShowAchievements(); }
+
+extern "C" void WebOSPort_ShowLegacyLeaderboards(void)
+{
+    swm::PortRuntime::Instance().Notify("Leaderboards need an online service; best times are kept in Time Attack");
+}
 
 namespace swm
 {
 
-void ConfigureRetroSession(const std::string &coinsPath) { State().coinsPath = coinsPath; }
+void ConfigureRetroSession(const std::string &coinsPath, const std::string &gameId)
+{
+    State().coinsPath = coinsPath;
+    State().gameId    = gameId;
+}
 
 void FinishRetroSession()
 {

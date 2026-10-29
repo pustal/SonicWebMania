@@ -73,6 +73,16 @@ public:
      */
     SaveSelectResult RunSaveSelect(const SaveSelectRequest &request);
 
+    /**
+     * Shows the achievement list on its own (Back or OK closes it), blocking
+     * the engine's main thread. Sonic CD's menu opens it from its
+     * Achievements entry.
+     */
+    void ShowAchievements();
+
+    /** Shows @p text at the bottom of the screen for a few seconds (e.g. an unlocked achievement). */
+    void Notify(const std::string &text);
+
     // ---- Engine hooks (see WebOSPortHooks.h) ----
 
     void OnEngineVideoReady(SDL_Window *window, SDL_Renderer *renderer, SDL_AudioDeviceID audioDevice, WebOSPortRedrawFn redraw);
@@ -205,6 +215,7 @@ private:
     bool deleteArmed_         = false; ///< "Delete" was pressed once; a second press deletes.
     int characterSelected_    = 0;
     int modeSelected_         = 0;
+    bool achievementsOnly_    = false; ///< The list was opened by ShowAchievements(): leaving it closes the menu.
 
     bool menuOpen_         = false;
     Screen screen_         = Screen::Main;

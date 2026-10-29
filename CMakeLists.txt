@@ -8,7 +8,7 @@
 # See README.md for the full walkthrough.
 
 cmake_minimum_required(VERSION 3.21)
-project(SonicWebMania VERSION 1.3.0 LANGUAGES C CXX)
+project(SonicWebMania VERSION 1.4.0 LANGUAGES C CXX)
 
 set(SWM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${SWM_ROOT}/cmake")
@@ -124,6 +124,7 @@ add_library(swm_port STATIC
     src/port/PortConfig.cpp
     src/port/PortRuntime.cpp
     src/port/RemoteInput.cpp
+    src/port/RetroAchievements.cpp
     src/port/RetroGames.cpp
     src/port/RsdkPack.cpp
     src/port/SetupScreen.cpp
