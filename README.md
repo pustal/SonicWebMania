@@ -82,9 +82,13 @@ remote are held for at least a frame, so the game never misses a short press.
   drive, chosen in **Store packs on**, and moved between them later with each pack's
   **Move** button. Sonic Mania's goes in a `SonicWebMania` folder at the top of the drive.
   Only one copy is kept; if both exist, the TV's is used.
-- The packs the running game reads from can't be moved, replaced or removed until you
-  switch to another game (the engine reopens them for every file it reads). A new
-  `Data.rsdk` for Sonic Mania is staged instead and installed at the next start.
+- The engine reopens the packs the running game reads for every file, so those are never
+  changed under it: replacing or moving one copies it now and switches at the next start
+  (the page says so), and removing one waits until you switch games. Sonic Mania's pack is
+  in use during the retro games too when it lends them its audio.
+- **Clean up** removes what interrupted uploads, moves and Sonic CD conversions leave
+  behind (`.part` and `.conv` files, on the TV and the drives). The app keeps no cache;
+  files waiting for the next start are left alone.
 - The Mania Plus content is **off by default** and can be enabled there (see Licence).
 
 ## Retro games

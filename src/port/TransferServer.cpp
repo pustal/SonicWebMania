@@ -19,7 +19,10 @@
  *   DELETE /api/retro/:game/:edition   removes that pack wherever it is
  *   POST /api/retro/usb-folder?mount=<USB mount point>   creates SonicWebMania/retro on the drive
  *   POST /api/move?pack=mania|<game>-<edition>&dest=tv|usb[&mount=<USB mount point>]
- *                             moves a pack between the TV and a USB drive (not one in use)
+ *                             moves a pack between the TV and a USB drive (one in use is
+ *                             copied now and switched at the next start)
+ *   GET  /api/cleanup         JSON: leftovers of interrupted uploads, moves and conversions
+ *   POST /api/cleanup         removes them
  *
  * Packs the running game reads from (TransferServer::SetPacksInUse) are never
  * moved, replaced or removed: the engine reopens them by path for every file.
@@ -43,6 +46,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <limits>
 #include <random>
@@ -283,6 +287,81 @@ bool CopyFileWithProgress(const std::string &from, const std::string &to, Progre
     return ok;
 }
 
+/** Every place Sonic Mania's pack may be: the TV's data folder, then each USB drive. */
+std::vector<std::string> ManiaPackPaths(const Storage &storage)
+{
+    std::vector<std::string> paths = { storage.PathFor(Storage::kDataPackName) };
+    for (const UsbDrive &drive : ListUsbDrives())
+        paths.push_back(Storage::UsbDataPackPath(drive.mountPoint));
+    return paths;
+}
+
+/** Every place a retro pack may be: the TV's pack folder, then each USB drive's. */
+std::vector<std::string> PackPaths(const RetroLibrary &retro, const std::string &gameId, RetroEdition edition)
+{
+    std::vector<std::string> paths;
+    for (const std::string &folder : retro.PackFolders())
+        paths.push_back(folder + "/" + RetroLibrary::PackFileName(gameId, edition));
+    return paths;
+}
+
+/**
+ * Where a staged copy of a pack waits (`<path>.pending` for one of @p paths,
+ * the TV's first): "tv", "usb", or "" when nothing is staged.
+ */
+std::string PendingLocation(const std::vector<std::string> &paths)
+{
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+        std::error_code ec;
+        if (std::filesystem::exists(Storage::PendingPathFor(paths[i]), ec))
+            return i == 0 ? "tv" : "usb";
+    }
+    return {};
+}
+
+/** Suffixes of files an interrupted upload, move or Sonic CD conversion leaves behind. */
+constexpr const char *kLeftoverSuffixes[] = { ".part", ".conv" };
+
+/**
+ * Files the app can safely delete: leftovers of interrupted transfers (see
+ * kLeftoverSuffixes) in every folder it writes to, on the TV and the USB
+ * drives, and the engine's log files (only written by builds with
+ * SWM_ENGINE_LOG on). Staged files (.pending, incoming/) are not included:
+ * they are applied at the next start.
+ */
+std::vector<std::string> CleanableFiles(const Storage &storage, const RetroLibrary &retro)
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> folders = { storage.Root(), storage.IncomingDir() };
+    std::error_code ec;
+    for (const char *parent : { Storage::kGamesFolderName, "incoming/games" }) {
+        for (const fs::directory_entry &game : fs::directory_iterator(storage.PathFor(parent), ec))
+            folders.push_back(game.path().string());
+    }
+    for (const std::string &packFolder : retro.PackFolders())
+        folders.push_back(packFolder);
+    for (const UsbDrive &drive : ListUsbDrives())
+        folders.push_back(Storage::UsbFolder(drive.mountPoint));
+
+    std::vector<std::string> files;
+    for (const std::string &folder : folders) {
+        for (const fs::directory_entry &entry : fs::directory_iterator(folder, ec)) {
+            std::error_code typeError;
+            if (!entry.is_regular_file(typeError))
+                continue;
+            const std::string name = entry.path().filename().string();
+            bool cleanable         = name == "log.txt";
+            for (const char *suffix : kLeftoverSuffixes) {
+                const std::size_t length = std::strlen(suffix);
+                cleanable = cleanable || (name.size() > length && name.compare(name.size() - length, length, suffix) == 0);
+            }
+            if (cleanable)
+                files.push_back(entry.path().string());
+        }
+    }
+    return files;
+}
+
 /** JSON array of @p files. */
 std::string FileListJson(const std::vector<UserFile> &files)
 {
@@ -432,7 +511,8 @@ void TransferServer::RegisterRoutes()
              << ",\"dataPack\":{\"present\":" << (packValid ? "true" : "false")
              << ",\"size\":" << (packValid ? Storage::FileSize(packPath) : 0) << ",\"location\":\""
              << (packOnUsb ? "usb" : "tv") << "\",\"mount\":\"" << JsonEscape(packOnUsb ? packDrive.mountPoint : "")
-             << "\",\"inUse\":" << (packValid && IsPackInUse(packPath) ? "true" : "false") << "}"
+             << "\",\"inUse\":" << (packValid && IsPackInUse(packPath) ? "true" : "false") << ",\"pending\":\""
+             << PendingLocation(ManiaPackPaths(storage_)) << "\"}"
              << ",\"plusEnabled\":" << (config_.IsPlusEnabled() ? "true" : "false")
              << ",\"retroEnabled\":" << (config_.IsRetroEnabled() ? "true" : "false")
              << ",\"maniaAudio\":" << (config_.IsManiaAudioEnabled() ? "true" : "false")
@@ -663,11 +743,14 @@ void TransferServer::RegisterRoutes()
 namespace
 {
 
-/** JSON for one pack slot of a retro game (@p inUse: the running game reads it). */
-std::string PackJson(const RetroPack &pack, bool inUse)
+/**
+ * JSON for one pack slot of a retro game (@p inUse: the running game reads
+ * it; @p pending: where a staged replacement waits, "" for none).
+ */
+std::string PackJson(const RetroPack &pack, bool inUse, const std::string &pending)
 {
     std::ostringstream json;
-    json << "{\"state\":\"" << PackStateName(pack.state) << "\"";
+    json << "{\"state\":\"" << PackStateName(pack.state) << "\",\"pending\":\"" << pending << "\"";
     if (pack.state != PackState::Missing) {
         json << ",\"location\":\"" << (pack.onUsb ? "usb" : "tv") << "\",\"path\":\"" << JsonEscape(pack.path)
              << "\",\"size\":" << pack.size;
@@ -697,14 +780,6 @@ std::string PackLabel(const RetroGameInfo &game, RetroEdition edition)
     return std::string(game.title) + (edition == RetroEdition::Origins ? " (Origins)" : " (classic)");
 }
 
-/** Every folder a retro pack may be in: the TV's, then each USB drive's. */
-std::vector<std::string> AllPackFolders(const RetroLibrary &retro)
-{
-    std::vector<std::string> folders = { retro.TvPackFolder() };
-    for (const UsbDrive &drive : ListUsbDrives())
-        folders.push_back(RetroLibrary::UsbPackFolder(drive.mountPoint));
-    return folders;
-}
 
 } // namespace
 
@@ -736,8 +811,11 @@ void TransferServer::RegisterRetroRoutes()
                  << "\",\"playable\":" << (game.Playable() ? "true" : "false")
                  << ",\"sound\":" << (game.HasSound() ? "true" : "false") << ",\"mode\":\""
                  << JsonEscape(game.ModeDescription()) << "\",\"origins\":"
-                 << PackJson(game.origins, game.origins.state != PackState::Missing && IsPackInUse(game.origins.path))
-                 << ",\"classic\":" << PackJson(game.classic, game.classic.state != PackState::Missing && IsPackInUse(game.classic.path))
+                 << PackJson(game.origins, game.origins.state != PackState::Missing && IsPackInUse(game.origins.path),
+                             PendingLocation(PackPaths(retro_, game.info.id, RetroEdition::Origins)))
+                 << ",\"classic\":"
+                 << PackJson(game.classic, game.classic.state != PackState::Missing && IsPackInUse(game.classic.path),
+                             PendingLocation(PackPaths(retro_, game.info.id, RetroEdition::Classic)))
                  << "}";
             first = false;
         }
@@ -797,12 +875,13 @@ void TransferServer::RegisterRetroRoutes()
                             + HumanBytes(free) + " is free.");
         }
 
-        // Installing replaces this pack wherever it is: not while the game reads it.
+        // Installing replaces this pack wherever it is. While the game reads
+        // it, the new one waits as <pack>.pending for the next start
+        // (RetroLibrary::ApplyPendingPacks).
         const std::string label = PackLabel(*game, edition);
-        for (const std::string &other : AllPackFolders(retro_)) {
-            if (IsPackInUse(other + "/" + RetroLibrary::PackFileName(game->id, edition)))
-                return Fail(res, 409, label + " is in use by the game running now. Switch to another game first.");
-        }
+        bool stage              = false;
+        for (const std::string &other : retro_.PackFolders())
+            stage = stage || IsPackInUse(other + "/" + RetroLibrary::PackFileName(game->id, edition));
 
         std::error_code ec;
         std::filesystem::create_directories(folder, ec);
@@ -874,7 +953,8 @@ void TransferServer::RegisterRetroRoutes()
             return Fail(res, 415, "That file is not an RSDKv3/v4 data pack (a Sonic Mania Data.rsdk belongs above).");
         }
 
-        const std::string destination = folder + "/" + fileName;
+        const std::string target      = folder + "/" + fileName;
+        const std::string destination = stage ? Storage::PendingPathFor(target) : target;
         std::filesystem::rename(readyPath, destination, ec);
         if (ec) {
             std::filesystem::remove(readyPath, ec);
@@ -882,14 +962,16 @@ void TransferServer::RegisterRetroRoutes()
         }
 
         // One copy only: the TV's folder is searched first, so an older copy there would win.
-        for (const std::string &other : AllPackFolders(retro_)) {
-            if (other != folder)
-                std::filesystem::remove(other + "/" + fileName, ec);
+        if (!stage) {
+            for (const std::string &other : retro_.PackFolders()) {
+                if (other != folder)
+                    std::filesystem::remove(other + "/" + fileName, ec);
+            }
         }
 
         NoteRestartNeeded();
-        PublishEvent(label + " installed.");
-        res.set_content("installed", kTextType);
+        PublishEvent(stage ? label + " received. It replaces the one in use at the next start." : label + " installed.");
+        res.set_content(stage ? "staged" : "installed", kTextType);
     });
 
     server.Delete("/api/retro/:game/:edition", [this](const httplib::Request &req, httplib::Response &res) {
@@ -899,12 +981,12 @@ void TransferServer::RegisterRetroRoutes()
             return Fail(res, 404, "Unknown game or edition.");
 
         const std::string fileName = RetroLibrary::PackFileName(game->id, edition);
-        for (const std::string &folder : AllPackFolders(retro_)) {
+        for (const std::string &folder : retro_.PackFolders()) {
             if (IsPackInUse(folder + "/" + fileName))
                 return Fail(res, 409, PackLabel(*game, edition) + " is in use by the game running now. Switch to another game first.");
         }
         int removed = 0;
-        for (const std::string &folder : AllPackFolders(retro_)) {
+        for (const std::string &folder : retro_.PackFolders()) {
             std::error_code ec;
             if (std::filesystem::remove(folder + "/" + fileName, ec))
                 ++removed;
@@ -946,8 +1028,10 @@ void TransferServer::RegisterRetroRoutes()
         }
         if (source.empty())
             return Fail(res, 404, label + " is not installed.");
-        if (IsPackInUse(source))
-            return Fail(res, 409, label + " is in use by the game running now. Switch to another game first.");
+        // A pack the game reads is copied now and switched at the next start
+        // (Storage::ApplyPendingFiles / RetroLibrary::ApplyPendingPacks remove
+        // the original then); any other moves at once.
+        const bool stage = IsPackInUse(source);
 
         Destination dest;
         if (!ParseDestination(req, storage_, &dest, res))
@@ -997,10 +1081,16 @@ void TransferServer::RegisterRetroRoutes()
             PublishEvent("Could not move " + label + ".");
             return Fail(res, 500, "Could not copy " + label + " there (the original is untouched).");
         }
-        std::filesystem::rename(partPath, target, ec);
+        std::filesystem::rename(partPath, stage ? Storage::PendingPathFor(target) : target, ec);
         if (ec) {
             std::filesystem::remove(partPath, ec);
             return Fail(res, 500, "Could not move the file into place (the original is untouched).");
+        }
+        if (stage) {
+            NoteRestartNeeded();
+            PublishEvent(label + " copied. The move finishes at the next start.");
+            res.set_content("staged", kTextType);
+            return;
         }
         std::filesystem::remove(source, ec);
         if (ec) {
@@ -1011,6 +1101,38 @@ void TransferServer::RegisterRetroRoutes()
 
         PublishEvent(label + std::string(" moved to the ") + (dest.usb ? "USB drive." : "TV."));
         res.set_content("moved", kTextType);
+    });
+
+    server.Get("/api/cleanup", [this](const httplib::Request &, httplib::Response &res) {
+        std::uint64_t bytes = 0;
+        const std::vector<std::string> files = CleanableFiles(storage_, retro_);
+        for (const std::string &file : files)
+            bytes += Storage::FileSize(file);
+        std::ostringstream json;
+        json << "{\"files\":" << files.size() << ",\"bytes\":" << bytes
+             << ",\"busy\":" << (uploadInProgress_.load() ? "true" : "false") << "}";
+        res.set_content(json.str(), kJsonType);
+    });
+
+    server.Post("/api/cleanup", [this](const httplib::Request &, httplib::Response &res) {
+        // A running upload or move writes one of these files: wait for it.
+        if (uploadInProgress_.exchange(true))
+            return Fail(res, 409, "An upload or move is running. Clean up when it has finished.");
+        const std::unique_ptr<std::atomic<bool>, void (*)(std::atomic<bool> *)> uploadGuard(
+            &uploadInProgress_, [](std::atomic<bool> *flag) { flag->store(false); });
+
+        std::uint64_t freed = 0;
+        int removed         = 0;
+        for (const std::string &file : CleanableFiles(storage_, retro_)) {
+            const std::uint64_t size = Storage::FileSize(file);
+            std::error_code ec;
+            if (std::filesystem::remove(file, ec)) {
+                freed += size;
+                ++removed;
+            }
+        }
+        PublishEvent("Cleaned up " + HumanBytes(freed) + ".");
+        res.set_content("Removed " + std::to_string(removed) + " file(s), " + HumanBytes(freed) + " freed.", kTextType);
     });
 }
 

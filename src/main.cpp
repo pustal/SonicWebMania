@@ -186,14 +186,14 @@ int32 main(int32 argc, char *argv[])
         return 1;
     }
 
-    const int applied = storage.ApplyPendingFiles();
+    swm::RetroLibrary retro(storage);
+    const int applied = storage.ApplyPendingFiles() + retro.ApplyPendingPacks();
     if (applied > 0)
-        std::printf("SonicWebMania: applied %d file(s) uploaded during the last session\n", applied);
+        std::printf("SonicWebMania: applied %d file(s) uploaded or moved during the last session\n", applied);
     storage.TrimLog();
     WriteDefaultSettingsIfMissing(storage);
 
     swm::PortConfig config(storage.PathFor(swm::PortConfig::kFileName));
-    swm::RetroLibrary retro(storage);
     swm::TransferServer server(storage, config, retro, swm::GeneratePin());
     const bool serverRunning = server.Start();
     if (serverRunning)

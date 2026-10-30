@@ -143,12 +143,52 @@ void RetroLibrary::FindPack(const std::vector<std::pair<std::string, bool>> &fol
     }
 }
 
+std::vector<std::string> RetroLibrary::PackFolders() const
+{
+    std::vector<std::string> folders = { TvPackFolder() };
+    for (const UsbDrive &drive : ListUsbDrives())
+        folders.push_back(UsbPackFolder(drive.mountPoint));
+    return folders;
+}
+
+int RetroLibrary::ApplyPendingPacks() const
+{
+    const std::vector<std::string> folders = PackFolders();
+    int applied                            = 0;
+    for (const RetroGameInfo &info : RetroCatalogue()) {
+        for (const RetroEdition edition : { RetroEdition::Origins, RetroEdition::Classic }) {
+            const std::string fileName = PackFileName(info.id, edition);
+            for (const std::string &folder : folders) {
+                const std::string target  = folder + "/" + fileName;
+                const std::string pending = Storage::PendingPathFor(target);
+                std::error_code ec;
+                if (!std::filesystem::exists(pending, ec))
+                    continue;
+                if (Inspect(pending, nullptr) != PackState::Ready) {
+                    std::filesystem::remove(pending, ec);
+                    continue;
+                }
+                std::filesystem::rename(pending, target, ec);
+                if (ec)
+                    continue;
+                ++applied;
+                // One copy only: the TV's folder is searched first.
+                for (const std::string &other : folders) {
+                    if (other != folder)
+                        std::filesystem::remove(other + "/" + fileName, ec);
+                }
+            }
+        }
+    }
+    return applied;
+}
+
 std::vector<RetroGame> RetroLibrary::Scan() const
 {
     // The TV first, then each drive: (folder, is a USB drive).
-    std::vector<std::pair<std::string, bool>> folders = { { TvPackFolder(), false } };
-    for (const UsbDrive &drive : ListUsbDrives())
-        folders.emplace_back(UsbPackFolder(drive.mountPoint), true);
+    std::vector<std::pair<std::string, bool>> folders;
+    for (const std::string &folder : PackFolders())
+        folders.emplace_back(folder, !folders.empty());
 
     std::vector<RetroGame> games;
     for (const RetroGameInfo &info : RetroCatalogue()) {

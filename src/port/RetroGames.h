@@ -144,6 +144,22 @@ public:
     /** Reads the start of @p path and classifies it (see PackState). */
     static PackState Inspect(const std::string &path, char *version);
 
+    /**
+     * Every folder packs are kept in: the TV's, then each USB drive's
+     * (drives without the folder included, so new copies can go there).
+     */
+    std::vector<std::string> PackFolders() const;
+
+    /**
+     * Installs packs staged during the previous session (`<pack>.pending`,
+     * uploaded or moved while the game read the pack): each replaces the pack
+     * of that name, and the copies of it in the other folders are removed.
+     * Called before the engine starts, so nothing has them open.
+     *
+     * @return Number of packs installed.
+     */
+    int ApplyPendingPacks() const;
+
 private:
     /** Fills @p pack from the first folder in @p folders that has @p fileName. */
     static void FindPack(const std::vector<std::pair<std::string, bool>> &folders, const std::string &fileName, RetroPack *pack);
