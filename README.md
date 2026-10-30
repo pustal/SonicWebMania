@@ -2,7 +2,7 @@
 
 # SonicWebMania
 
-**Version 2.1.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+**Version 2.1.1** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
 and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations,
 built as a **native** webOS app (SDL2), with a few TV-friendly extras:
 
@@ -43,7 +43,7 @@ the menu is a stand-in drawn for the screenshot, where the paused game would be.
 
 | Transfer page: PIN | Transfer page: data, saves and settings |
 |---|---|
-| <img src="docs/images/web-pin.png" alt="Transfer page asking for the PIN" width="260"> | <img src="docs/images/web-page.png" alt="Transfer page with game data, saves and Plus option" width="260"> |
+| <img src="docs/images/web-pin.png" alt="Transfer page asking for the PIN" width="260"> | <img src="docs/images/web-page.png" alt="Transfer page with storage, Sonic Mania's pack, saves per game, retro game packs and settings" width="260"> |
 
 ## Remote control
 
