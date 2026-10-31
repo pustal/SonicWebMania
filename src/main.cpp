@@ -243,7 +243,7 @@ int32 main(int32 argc, char *argv[])
             }
             if (!audioPack.empty())
                 packsInUse.push_back(audioPack);
-            swm::ConfigureRetroAudio(game, config.IsManiaSimilarMusicEnabled());
+            swm::ConfigureRetroAudio(game, config.IsManiaSimilarMusicEnabled(), config.IsManiaRemixesEnabled());
         }
         else {
             std::fprintf(stderr, "SonicWebMania: cannot start %s: %s\n", game.c_str(), error.c_str());

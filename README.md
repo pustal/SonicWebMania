@@ -2,7 +2,7 @@
 
 # SonicWebMania
 
-**Version 2.1.1** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+**Version 2.2.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
 and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations,
 built as a **native** webOS app (SDL2), with a few TV-friendly extras:
 
@@ -123,8 +123,11 @@ How each game plays depends on what you upload:
     Knuckles' glide and climb...), or its nearest one; Amy's hammer uses Mania's hits
     and jumps.
   - Music: the zones and jingles Mania remixed, with Mania's loop points: Green Hill,
-    Chemical Plant, Oil Ocean, Stardust Speedway and Metallic Madness (by time period),
-    plus invincibility, speed shoes, act clear, boss, drowning, game over and Super.
+    Chemical Plant and Oil Ocean (Mania's act 1 remix in act 1, its act 2 remix from
+    act 2 on), Stardust Speedway and Metallic Madness (by time period), plus
+    invincibility, speed shoes, act clear, boss, drowning, game over and Super.
+  - **Mania remixes** (off by default): those zones play Mania's remix even when the
+    earlier release's pack has the original, and their speed shoes play Mania's jingle.
   - **Similar music** (off by default): zones Mania has no version of get a Mania track
     of similar feel, such as Emerald Hill with Green Hill, Casino Night with Studiopolis,
     Aquatic Ruin and Tidal Tempest with Hydrocity, Mystic Cave and Quartz Quadrant with

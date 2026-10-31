@@ -8,9 +8,11 @@
 #include "RetroAudio.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <set>
 #include <string>
+#include <utility>
 
 namespace
 {
@@ -119,7 +121,10 @@ struct MusicStandIn {
     const char *retro;
     const char *mania;
     int loop;
-    bool similar; ///< Only with "similar music" on: a different zone of similar feel.
+    bool similar;                    ///< Only with "similar music" on: a different zone of similar feel.
+    const char *maniaAct2 = nullptr; ///< Mania's act 2 version, played from the retro zone's act 2 on.
+    int loopAct2          = 0;
+    bool remix            = false;   ///< Mania remixed this zone: "Mania remixes" prefers it to the original.
 };
 
 constexpr MusicStandIn kMusicStandIns[] = {
@@ -132,18 +137,19 @@ constexpr MusicStandIn kMusicStandIns[] = {
     { kAll, "GameOver", "GameOver.ogg", 0, false },
     { kSonic2, "Super", "Super.ogg", 165375, false },
     { kAll, "Boss", "BossEggman1.ogg", 282240, false },
-    { kSonic1, "GreenHill", "GreenHill1.ogg", 776160, false },
-    { kSonic2, "ChemicalPlant", "ChemicalPlant1.ogg", 680400, false },
-    { kSonic2, "OilOcean", "OilOcean1.ogg", 358389, false },
+    // Loop points from Mania's scenes (GHZ, CPZ, OOZ1/OOZ2, SSZ1/SSZ2, MMZ).
+    { kSonic1, "GreenHill", "GreenHill1.ogg", 776160, false, "GreenHill2.ogg", 775552, true },
+    { kSonic2, "ChemicalPlant", "ChemicalPlant1.ogg", 680400, false, "ChemicalPlant2.ogg", 680400, true },
+    { kSonic2, "OilOcean", "OilOcean1.ogg", 358389, false, "OilOcean2.ogg", 176400, true },
     // Sonic CD: A present, B past, C good future, D bad future.
-    { kSonicCd, "R7A", "StardustSpeedway1.ogg", 432894, false },
-    { kSonicCd, "R7B", "StardustSpeedway1.ogg", 432894, false },
-    { kSonicCd, "R7C", "StardustSpeedway1.ogg", 432894, false },
-    { kSonicCd, "R7D", "StardustSpeedway2.ogg", 1, false },
-    { kSonicCd, "R8A", "MetallicMadness1.ogg", 470400, false },
-    { kSonicCd, "R8B", "MetallicMadness1.ogg", 470400, false },
-    { kSonicCd, "R8C", "MetallicMadness1.ogg", 470400, false },
-    { kSonicCd, "R8D", "MetallicMadness2.ogg", 296056, false },
+    { kSonicCd, "R7A", "StardustSpeedway1.ogg", 432894, false, nullptr, 0, true },
+    { kSonicCd, "R7B", "StardustSpeedway1.ogg", 432894, false, nullptr, 0, true },
+    { kSonicCd, "R7C", "StardustSpeedway1.ogg", 432894, false, nullptr, 0, true },
+    { kSonicCd, "R7D", "StardustSpeedway2.ogg", 1, false, nullptr, 0, true },
+    { kSonicCd, "R8A", "MetallicMadness1.ogg", 470400, false, nullptr, 0, true },
+    { kSonicCd, "R8B", "MetallicMadness1.ogg", 470400, false, nullptr, 0, true },
+    { kSonicCd, "R8C", "MetallicMadness1.ogg", 470400, false, nullptr, 0, true },
+    { kSonicCd, "R8D", "MetallicMadness2.ogg", 296056, false, nullptr, 0, true },
 
     // Similar feel (opt-in).
     { kAll, "TitleScreen", "TitleScreen.ogg", 0, true },
@@ -200,6 +206,7 @@ constexpr MusicStandIn kSpeedShoes = { kSonic1 | kSonic2, "", "Sneakers.ogg", 12
 struct AudioSession {
     unsigned game     = 0; ///< A Games bit; 0 for Sonic Mania (no stand-ins).
     bool similarMusic = false;
+    bool remixes      = false; ///< Mania's remixes win over the packs' originals.
     std::set<std::string> logged; ///< Stand-ins already reported to the log.
 };
 
@@ -273,16 +280,45 @@ const MusicStandIn *FindMusic(const std::string &name)
     return nullptr;
 }
 
+/** True when @p name is the sped-up track ("..._F.ogg") of a zone Mania remixed. */
+bool RemixedZoneFast(const std::string &name)
+{
+    const std::size_t dot = name.find_last_of('.');
+    const std::string base = dot == std::string::npos ? name : name.substr(0, dot);
+    if (base.size() <= 2 || !SameName(base.substr(base.size() - 2), "_F"))
+        return false;
+    const MusicStandIn *zone = FindMusic(base.substr(0, base.size() - 2) + ".ogg");
+    return zone && zone->remix;
+}
+
+/** The act being played, from the stage list's id ("1", "2"...), or 1 outside a stage list. */
+int CurrentAct()
+{
+    if (RSDK::engine.version == 5 || !RSDK::sceneInfo.listData)
+        return 1;
+    const int act = std::atoi(RSDK::sceneInfo.listData[RSDK::sceneInfo.listPos].id);
+    return act > 0 ? act : 1;
+}
+
+/** The Mania track and loop point of @p entry for the act being played. */
+std::pair<std::string, int> TrackForAct(const MusicStandIn &entry)
+{
+    if (entry.maniaAct2 && CurrentAct() >= 2)
+        return { entry.maniaAct2, entry.loopAct2 };
+    return { entry.mania, entry.loop };
+}
+
 } // namespace
 
 namespace swm
 {
 
-void ConfigureRetroAudio(const std::string &gameId, bool similarMusic)
+void ConfigureRetroAudio(const std::string &gameId, bool similarMusic, bool remixes)
 {
     AudioSession &session = Session();
     session.game          = gameId == "sonic1" ? kSonic1 : gameId == "sonic2" ? kSonic2 : gameId == "soniccd" ? kSonicCd : 0;
     session.similarMusic  = similarMusic;
+    session.remixes       = remixes;
 }
 
 } // namespace swm
@@ -308,19 +344,29 @@ extern "C" int WebOSPort_ResolveLegacyMusic(const char *name, char *out, int out
 {
     if (!Session().game || !name || !*name)
         return 0;
-    const std::string retro = name;
-    const int source        = SourceOf("Data/Music/" + retro);
-    if (source == RSDK::DATAFILE_SOURCE_GAME)
-        return 0;
-
+    const std::string retro   = name;
+    const int source          = SourceOf("Data/Music/" + retro);
     const MusicStandIn *entry = FindMusic(retro);
-    if (entry && SourceOf(std::string("Data/Music/") + entry->mania) == RSDK::DATAFILE_SOURCE_AUDIO) {
-        if (!CopyOut(entry->mania, out, outSize))
+
+    // The game's own track wins, unless it is a zone Mania remixed and the
+    // remixes are preferred. A remixed zone's sped-up track (speed shoes)
+    // becomes Mania's jingle too, rather than the original sped up.
+    if (source == RSDK::DATAFILE_SOURCE_GAME) {
+        const bool remixed = entry && Session().remixes && (entry->remix || entry == &kSpeedShoes);
+        if (!remixed || (entry == &kSpeedShoes && !RemixedZoneFast(retro)))
             return 0;
-        if (loopPoint)
-            *loopPoint = entry->loop;
-        LogOnce("music", retro, entry->mania);
-        return 1;
+    }
+
+    if (entry) {
+        const std::pair<std::string, int> track = TrackForAct(*entry);
+        if (SourceOf("Data/Music/" + track.first) == RSDK::DATAFILE_SOURCE_AUDIO) {
+            if (!CopyOut(track.first, out, outSize))
+                return 0;
+            if (loopPoint)
+                *loopPoint = track.second;
+            LogOnce("music", retro, track.first);
+            return 1;
+        }
     }
     // A Mania track that only shares the name (its title screen, credits...)
     // is a different song: play nothing rather than that, unless chosen above.

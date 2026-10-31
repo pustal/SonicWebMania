@@ -11,7 +11,7 @@
  *   GET  /api/files           JSON: saves/settings files, Sonic Mania's and each retro game's
  *   GET  /api/files/:name[?game=<id>]   download one file (a retro game's with ?game=sonic1 ...)
  *   PUT  /api/files/:name[?game=<id>]   raw body = replacement file (applied at next launch while playing)
- *   PUT  /api/settings?plusEnabled=0|1&retroEnabled=0|1&maniaAudio=0|1&maniaSimilarMusic=0|1
+ *   PUT  /api/settings?plusEnabled=0|1&retroEnabled=0|1&maniaAudio=0|1&maniaSimilarMusic=0|1&maniaRemixes=0|1
  *                             (any of them)
  *   GET  /api/retro           JSON: retro mode, TV and USB space, each game's packs
  *   PUT  /api/retro/:game/:edition?dest=tv|usb[&mount=<USB mount point>]
@@ -517,6 +517,7 @@ void TransferServer::RegisterRoutes()
              << ",\"retroEnabled\":" << (config_.IsRetroEnabled() ? "true" : "false")
              << ",\"maniaAudio\":" << (config_.IsManiaAudioEnabled() ? "true" : "false")
              << ",\"maniaSimilarMusic\":" << (config_.IsManiaSimilarMusicEnabled() ? "true" : "false")
+             << ",\"maniaRemixes\":" << (config_.IsManiaRemixesEnabled() ? "true" : "false")
              << ",\"restartPending\":" << (status.restartPending ? "true" : "false")
              << ",\"upload\":{\"active\":" << (status.uploading ? "true" : "false")
              << ",\"received\":" << status.receivedBytes << ",\"expected\":" << status.expectedBytes << "}}";
@@ -702,7 +703,7 @@ void TransferServer::RegisterRoutes()
 
     server.Put("/api/settings", [this](const httplib::Request &req, httplib::Response &res) {
         if (!req.has_param("plusEnabled") && !req.has_param("retroEnabled") && !req.has_param("maniaAudio")
-            && !req.has_param("maniaSimilarMusic"))
+            && !req.has_param("maniaSimilarMusic") && !req.has_param("maniaRemixes"))
             return Fail(res, 400, "Nothing to change.");
 
         std::string message;
@@ -730,6 +731,12 @@ void TransferServer::RegisterRoutes()
             if (!config_.SetManiaSimilarMusicEnabled(enabled))
                 return Fail(res, 500, "Could not save the setting.");
             message = enabled ? "Similar Mania music on. Restart to apply." : "Similar Mania music off. Restart to apply.";
+        }
+        if (req.has_param("maniaRemixes")) {
+            const bool enabled = req.get_param_value("maniaRemixes") == "1";
+            if (!config_.SetManiaRemixesEnabled(enabled))
+                return Fail(res, 500, "Could not save the setting.");
+            message = enabled ? "Sonic Mania remixes on. Restart to apply." : "Sonic Mania remixes off. Restart to apply.";
         }
 
         NoteRestartNeeded();

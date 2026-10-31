@@ -12,12 +12,15 @@
  * effect and track the game's packs lack, what to play instead:
  *   - sound effects: Mania's file of the same name, or its nearest one
  *     (Amy's hammer, for instance, uses Mania's hits and jumps);
- *   - music: the Mania remix of the same zone or jingle (Green Hill, Chemical
- *     Plant, Stardust Speedway, invincibility...), with Mania's loop point;
+ *   - music: the Mania remix of the same zone (its act 1 or act 2 version, as
+ *     the act being played) or jingle (Green Hill, Chemical Plant, Stardust
+ *     Speedway, invincibility...), with Mania's loop point;
  *   - with "similar music" on (off by default), zones Mania has no version of
  *     get a track of similar feel (Emerald Hill plays Green Hill, Casino
  *     Night plays Studiopolis...).
- * Whatever the game's own packs have always wins.
+ * Whatever the game's own packs have wins, except with "Mania remixes" on (off
+ * by default): then the zones Mania remixed play the remix even when the
+ * packs (the earlier releases') have the original.
  */
 #ifndef SWM_RETRO_AUDIO_H
 #define SWM_RETRO_AUDIO_H
@@ -34,8 +37,10 @@ namespace swm
  *                     "soniccd"); anything else (Sonic Mania) uses none.
  * @param similarMusic Also give zones Mania has no version of a track of
  *                     similar feel.
+ * @param remixes      Play Mania's remix of the zones it remixed even when
+ *                     the game's packs have the original.
  */
-void ConfigureRetroAudio(const std::string &gameId, bool similarMusic);
+void ConfigureRetroAudio(const std::string &gameId, bool similarMusic, bool remixes);
 
 } // namespace swm
 

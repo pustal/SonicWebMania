@@ -101,6 +101,9 @@
         Oil Ocean, Stardust Speedway, Metallic Madness, the jingles).</p>
       <p><label><input id="mania-similar" type="checkbox"> Also give other zones a Mania track of similar feel</label></p>
       <p class="dim">For example Emerald Hill plays Green Hill and Casino Night plays Studiopolis. Takes effect after a restart.</p>
+      <p><label><input id="mania-remixes" type="checkbox"> Play Sonic Mania's remixes in their zones</label></p>
+      <p class="dim">Green Hill, Chemical Plant, Oil Ocean, Stardust Speedway and Metallic Madness play Mania's remix (act 1
+        or act 2, as the act) even when the earlier release's pack has the original. Takes effect after a restart.</p>
       <div id="retro-games"></div>
       <progress id="retro-progress" class="hidden" max="100" value="0"></progress>
       <p id="retro-message"></p>
@@ -128,7 +131,7 @@
  * @typedef {{ active: boolean, received: number, expected: number }} UploadState
  * @typedef {{ version: string, mode: 'setup'|'game', freeBytes: number, safetyMarginBytes: number, persistent: boolean,
  *             dataPack: DataPackState, plusEnabled: boolean, retroEnabled: boolean, maniaAudio: boolean,
- *             maniaSimilarMusic: boolean, restartPending: boolean,
+ *             maniaSimilarMusic: boolean, maniaRemixes: boolean, restartPending: boolean,
  *             upload: UploadState }} Status
  * @typedef {{ name: string, size: number, mtime: number }} UserFile
  * @typedef {{ id: string, title: string, files: UserFile[] }} GameFiles
@@ -251,6 +254,9 @@ async function refreshStatus() {
   const similar = /** @type {HTMLInputElement} */ (byId('mania-similar'));
   similar.checked = status.maniaSimilarMusic;
   similar.disabled = !status.maniaAudio;
+  const remixes = /** @type {HTMLInputElement} */ (byId('mania-remixes'));
+  remixes.checked = status.maniaRemixes;
+  remixes.disabled = !status.maniaAudio;
   renderManiaPack();
 }
 
@@ -775,6 +781,12 @@ byId('mania-audio').addEventListener('change', async (event) => {
 byId('mania-similar').addEventListener('change', async (event) => {
   const checked = /** @type {HTMLInputElement} */ (event.target).checked;
   await api('/api/settings?maniaSimilarMusic=' + (checked ? '1' : '0'), { method: 'PUT' });
+  await refreshStatus();
+});
+
+byId('mania-remixes').addEventListener('change', async (event) => {
+  const checked = /** @type {HTMLInputElement} */ (event.target).checked;
+  await api('/api/settings?maniaRemixes=' + (checked ? '1' : '0'), { method: 'PUT' });
   await refreshStatus();
 });
 

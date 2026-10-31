@@ -2,7 +2,7 @@
  * @file PortConfig.cpp
  * @brief Reads and writes port.ini (see PortConfig.h). The format is plain
  *        "key=value" lines (plusEnabled, retroEnabled, maniaAudio,
- *        maniaSimilarMusic, lastGame); unknown
+ *        maniaSimilarMusic, maniaRemixes, lastGame); unknown
  *        keys are ignored.
  */
 #include "PortConfig.h"
@@ -19,6 +19,7 @@ constexpr const char *kRetroKey    = "retroEnabled";
 constexpr const char *kLastGameKey = "lastGame";
 constexpr const char *kManiaAudioKey   = "maniaAudio";
 constexpr const char *kManiaSimilarKey = "maniaSimilarMusic";
+constexpr const char *kManiaRemixesKey = "maniaRemixes";
 
 /** Game ids are short names of letters and digits; anything else is ignored. */
 bool IsPlainId(const std::string &id)
@@ -66,6 +67,8 @@ PortConfig::PortConfig(std::string path) : path_(std::move(path))
             maniaAudio_ = ParseBool(value);
         else if (key == kManiaSimilarKey)
             maniaSimilar_ = ParseBool(value);
+        else if (key == kManiaRemixesKey)
+            maniaRemixes_ = ParseBool(value);
         else if (key == kLastGameKey && IsPlainId(value))
             lastGame_ = value;
     }
@@ -123,6 +126,19 @@ bool PortConfig::SetManiaSimilarMusicEnabled(bool enabled)
     return SaveLocked();
 }
 
+bool PortConfig::IsManiaRemixesEnabled() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return maniaRemixes_;
+}
+
+bool PortConfig::SetManiaRemixesEnabled(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    maniaRemixes_ = enabled;
+    return SaveLocked();
+}
+
 std::string PortConfig::LastGame() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -147,6 +163,7 @@ bool PortConfig::SaveLocked() const
     out << kRetroKey << '=' << (retroEnabled_ ? "1" : "0") << '\n';
     out << kManiaAudioKey << '=' << (maniaAudio_ ? "1" : "0") << '\n';
     out << kManiaSimilarKey << '=' << (maniaSimilar_ ? "1" : "0") << '\n';
+    out << kManiaRemixesKey << '=' << (maniaRemixes_ ? "1" : "0") << '\n';
     if (!lastGame_.empty())
         out << kLastGameKey << '=' << lastGame_ << '\n';
     return static_cast<bool>(out);

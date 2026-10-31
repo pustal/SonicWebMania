@@ -63,6 +63,17 @@ public:
     bool SetManiaSimilarMusicEnabled(bool enabled);
 
     /**
+     * Whether, on top of IsManiaAudioEnabled(), the zones Mania remixed
+     * (Green Hill, Chemical Plant, Oil Ocean, Stardust Speedway, Metallic
+     * Madness) play Mania's remix even when the game's packs have the
+     * original. Off by default.
+     */
+    bool IsManiaRemixesEnabled() const;
+
+    /** Stores the Mania remixes setting. @return False if port.ini could not be written. */
+    bool SetManiaRemixesEnabled(bool enabled);
+
+    /**
      * The game to start when the app is opened: the id of the last game that
      * was left normally ("mania", "sonic1", ...), or "" for the default.
      *
@@ -85,6 +96,7 @@ private:
     bool retroEnabled_ = false;
     bool maniaAudio_   = true;
     bool maniaSimilar_ = false;
+    bool maniaRemixes_ = false;
     std::string lastGame_;
 };
 
