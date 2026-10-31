@@ -28,6 +28,8 @@ built as a **native** webOS app (SDL2), with a few TV-friendly extras:
 
 No game assets are included or downloaded by this project.
 
+For other platforms, check [Sonic Mania Decompilation Plus](https://github.com/pustal/Sonic-Mania-Decompilation-Plus).
+
 ## Screenshots
 
 These show the port's own screens; none of them contain game graphics. The scene behind
