@@ -33,6 +33,8 @@ add_custom_target(webos-stage
     COMMAND "${CMAKE_COMMAND}" -E copy "${SWM_SDL2_RUNTIME_LIBRARY}" "${SWM_IPK_STAGE}/lib/"
     COMMAND "${CMAKE_STRIP}" --strip-unneeded "${SWM_IPK_STAGE}/lib/libSDL2-2.0.so.0"
     COMMAND "${CMAKE_COMMAND}" -E copy "${SWM_ROOT}/LICENSE.md" "${SWM_ROOT}/THIRD_PARTY_NOTICES.md" "${SWM_IPK_STAGE}/"
+    # The third-party licences' full texts, which their terms ask to ship with the binaries.
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory "${SWM_ROOT}/licenses" "${SWM_IPK_STAGE}/licenses"
     DEPENDS RetroEngine
     COMMENT "Staging the IPK contents in ${SWM_IPK_STAGE}"
     VERBATIM

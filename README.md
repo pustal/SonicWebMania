@@ -2,7 +2,7 @@
 
 # SonicWebMania
 
-**Version 2.2.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+**Version 2.2.1** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
 and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations,
 built as a **native** webOS app (SDL2), with a few TV-friendly extras:
 
@@ -314,8 +314,9 @@ external/                   submodules: engine, game, cpp-httplib, libogg, libth
 ## Licence
 
 See `LICENSE.md`. In short: this is a non-commercial project built on the RSDKv5 and
-Sonic Mania decompilations by Rubberduckycooly and chuliRMG; their licences apply to
-the whole repository. Builds must keep the Plus content off by default, may not be sold
+Sonic Mania decompilations by Rubberduckycooly and chuliRMG. The port's own code has its
+own licence, the SonicWebMania licence, on the same terms as theirs, and their licences
+apply to the whole repository. Builds must keep the Plus content off by default, may not be sold
 or used for profit, and may not include game assets.
 
 Sonic Mania, Sonic the Hedgehog, Sonic CD and Sonic Origins are trademarks of SEGA. This project is not affiliated with SEGA.
