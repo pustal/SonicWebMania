@@ -1,10 +1,9 @@
 /**
  * @file RetroGames.cpp
- * @brief Finds and prepares the retro games' data packs (see RetroGames.h).
+ * @brief Finds the retro games' data packs (see RetroGames.h).
  */
 #include "RetroGames.h"
 
-#include "IniEdit.h"
 #include "RsdkPack.h"
 #include "Storage.h"
 #include "UsbDrives.h"
@@ -25,9 +24,6 @@ namespace
 /** Smallest file that can be a pack: the 6-byte header plus a file table. */
 constexpr std::uint64_t kMinimumPackBytes = 64;
 
-/** Settings.ini values Game:gameType understands (RSDKv5U's legacy cores). */
-constexpr int kGameTypeStandalone = 0; ///< The earlier releases.
-constexpr int kGameTypeOrigins    = 1; ///< Sonic Origins.
 
 } // namespace
 
@@ -88,11 +84,6 @@ std::string RetroLibrary::TvPackFolder() const { return storage_.PathFor(kPackFo
 std::string RetroLibrary::UsbPackFolder(const std::string &mountPoint)
 {
     return mountPoint + "/" + kUsbFolderName + "/" + kPackFolderName;
-}
-
-std::string RetroLibrary::WorkFolder(const std::string &id) const
-{
-    return storage_.PathFor(std::string(Storage::kGamesFolderName) + "/" + id);
 }
 
 PackState RetroLibrary::Inspect(const std::string &path, char *version)
@@ -209,39 +200,6 @@ std::vector<RetroGame> RetroLibrary::ScanPlayable() const
             playable.push_back(game);
     }
     return playable;
-}
-
-bool RetroLibrary::PrepareLaunch(const RetroGame &game, const std::string &defaultSettings, const std::string &audioPack,
-                                 std::string *error) const
-{
-    if (!game.Playable()) {
-        if (error)
-            *error = std::string(game.info.title) + " has no playable data pack";
-        return false;
-    }
-
-    const std::string folder = WorkFolder(game.info.id);
-    std::error_code ec;
-    std::filesystem::create_directories(folder, ec);
-    if (ec) {
-        if (error)
-            *error = "cannot create " + folder + ": " + ec.message();
-        return false;
-    }
-
-    // Origins first: the engine takes each file from the first pack that has
-    // it and detects the engine version from the first pack.
-    const bool origins          = game.origins.state == PackState::Ready;
-    const std::string dataFile  = origins ? game.origins.path : game.classic.path;
-    const std::string extraFile = origins && game.HasSound() ? game.classic.path : std::string();
-    const int gameType          = origins ? kGameTypeOrigins : kGameTypeStandalone;
-
-    return UpdateIniFile(folder + "/Settings.ini", defaultSettings, "Game",
-                         { { "dataFile", dataFile },
-                           { "extraDataFile", extraFile },
-                           { "audioDataFile", audioPack },
-                           { "gameType", std::to_string(gameType) } },
-                         error);
 }
 
 } // namespace swm

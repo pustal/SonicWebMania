@@ -1,9 +1,3 @@
-[submodule "external/RSDKv5-Decompilation"]
-	path = external/RSDKv5-Decompilation
-	url = https://github.com/RSDKModding/RSDKv5-Decompilation.git
-[submodule "external/Sonic-Mania-Decompilation"]
-	path = external/Sonic-Mania-Decompilation
-	url = https://github.com/RSDKModding/Sonic-Mania-Decompilation.git
 [submodule "external/ogg"]
 	path = external/ogg
 	url = https://github.com/xiph/ogg.git
@@ -13,3 +7,9 @@
 [submodule "external/cpp-httplib"]
 	path = external/cpp-httplib
 	url = https://github.com/yhirose/cpp-httplib.git
+[submodule "external/RSDKv5-Decompilation-Plus"]
+	path = external/RSDKv5-Decompilation-Plus
+	url = https://github.com/pustal/RSDKv5-Decompilation-Plus.git
+[submodule "external/Sonic-Mania-Decompilation-Plus"]
+	path = external/Sonic-Mania-Decompilation-Plus
+	url = https://github.com/pustal/Sonic-Mania-Decompilation-Plus.git

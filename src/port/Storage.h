@@ -99,7 +99,7 @@ public:
      * Moves files staged during the previous session into place: a Data.rsdk
      * (on the TV or a USB drive; the other copies are then removed), saves
      * and settings for the data directory, and those staged under
-     * incoming/games/<id>/ for a retro game's folder. Called before the engine
+     * incoming/retro/<id>/ for a retro game's save folder. Called before the engine
      * starts, so nothing has them open.
      *
      * @return Number of files applied.
@@ -112,7 +112,7 @@ public:
     /**
      * Saves and settings that may be downloaded or replaced through the web
      * page: those of the data directory, or of @p subdir inside it (a retro
-     * game's working folder, "games/<id>").
+     * game's save folder, "retro/<id>").
      */
     std::vector<UserFile> ListUserFiles(const std::string &subdir = std::string()) const;
 
@@ -122,8 +122,12 @@ public:
      */
     static bool IsAllowedUserFileName(const std::string &name);
 
-    /** Folder (inside the data directory) holding the retro games' working folders; see RetroLibrary. */
-    static constexpr const char *kGamesFolderName = "games";
+    /**
+     * Folder (inside the data directory) holding each retro game's saves in
+     * "<folder>/<id>/", as the engine's Plus module keeps them. The TV's retro
+     * packs are kept in the same folder (see RetroLibrary).
+     */
+    static constexpr const char *kSavesFolderName = "retro";
 
     /** True for a game id: lower-case letters and digits only, at most 32. */
     static bool IsPlainName(const std::string &name);

@@ -31,7 +31,7 @@
 
 #include "NetInfo.h"
 #include "PortInfo.h"
-#include "PortConfig.h"
+#include "SettingsChannel.h"
 #include "RetroGames.h"
 #include "RsdkPack.h"
 #include "Storage.h"
@@ -178,7 +178,7 @@ std::int64_t StreamBodyToFile(const httplib::ContentReader &reader, const std::s
 
 /**
  * The folder (relative to the data directory) a /api/files request is about:
- * "" for Sonic Mania's files, "games/<id>" with ?game=<id> for a retro game.
+ * "" for Sonic Mania's files, "retro/<id>" with ?game=<id> for a retro game.
  *
  * @return False for an unknown game.
  */
@@ -191,7 +191,7 @@ bool FilesFolder(const httplib::Request &req, std::string *folder)
     }
     if (!RetroLibrary::FindGame(game))
         return false;
-    *folder = std::string(Storage::kGamesFolderName) + "/" + game;
+    *folder = std::string(Storage::kSavesFolderName) + "/" + game;
     return true;
 }
 
@@ -334,9 +334,14 @@ std::vector<std::string> CleanableFiles(const Storage &storage, const RetroLibra
     namespace fs = std::filesystem;
     std::vector<std::string> folders = { storage.Root(), storage.IncomingDir() };
     std::error_code ec;
-    for (const char *parent : { Storage::kGamesFolderName, "incoming/games" }) {
-        for (const fs::directory_entry &game : fs::directory_iterator(storage.PathFor(parent), ec))
-            folders.push_back(game.path().string());
+    // Each retro game's save folder, and its staged uploads (the packs next to them are in PackFolders()).
+    const std::string savesFolder = Storage::kSavesFolderName;
+    for (const std::string &parent : { savesFolder, "incoming/" + savesFolder }) {
+        for (const fs::directory_entry &game : fs::directory_iterator(storage.PathFor(parent), ec)) {
+            std::error_code typeError;
+            if (game.is_directory(typeError))
+                folders.push_back(game.path().string());
+        }
     }
     for (const std::string &packFolder : retro.PackFolders())
         folders.push_back(packFolder);
@@ -388,8 +393,8 @@ std::string GeneratePin()
     return buffer;
 }
 
-TransferServer::TransferServer(Storage &storage, PortConfig &config, const RetroLibrary &retro, std::string pin)
-    : storage_(storage), config_(config), retro_(retro), pin_(std::move(pin))
+TransferServer::TransferServer(Storage &storage, SettingsChannel &settings, const RetroLibrary &retro, std::string pin)
+    : storage_(storage), settings_(settings), retro_(retro), pin_(std::move(pin))
 {
 }
 
@@ -497,8 +502,9 @@ void TransferServer::RegisterRoutes()
     });
 
     server.Get("/api/status", [this](const httplib::Request &, httplib::Response &res) {
-        const TransferStatus status = Snapshot();
-        const std::string packPath  = storage_.DataPackPath();
+        const TransferStatus status   = Snapshot();
+        const GameSettings settings   = settings_.Current();
+        const std::string packPath    = storage_.DataPackPath();
         const bool packValid        = !packPath.empty();
         UsbDrive packDrive;
         const bool packOnUsb = packValid && DriveOf(packPath, &packDrive);
@@ -513,11 +519,10 @@ void TransferServer::RegisterRoutes()
              << (packOnUsb ? "usb" : "tv") << "\",\"mount\":\"" << JsonEscape(packOnUsb ? packDrive.mountPoint : "")
              << "\",\"inUse\":" << (packValid && IsPackInUse(packPath) ? "true" : "false") << ",\"pending\":\""
              << PendingLocation(ManiaPackPaths(storage_)) << "\"}"
-             << ",\"plusEnabled\":" << (config_.IsPlusEnabled() ? "true" : "false")
-             << ",\"retroEnabled\":" << (config_.IsRetroEnabled() ? "true" : "false")
-             << ",\"maniaAudio\":" << (config_.IsManiaAudioEnabled() ? "true" : "false")
-             << ",\"maniaSimilarMusic\":" << (config_.IsManiaSimilarMusicEnabled() ? "true" : "false")
-             << ",\"maniaRemixes\":" << (config_.IsManiaRemixesEnabled() ? "true" : "false")
+             << ",\"plusEnabled\":" << (settings.plusDLC ? "true" : "false")
+             << ",\"maniaAudio\":" << (settings.maniaAudio ? "true" : "false")
+             << ",\"maniaSimilarMusic\":" << (settings.similarMusic ? "true" : "false")
+             << ",\"maniaRemixes\":" << (settings.maniaRemixes ? "true" : "false")
              << ",\"restartPending\":" << (status.restartPending ? "true" : "false")
              << ",\"upload\":{\"active\":" << (status.uploading ? "true" : "false")
              << ",\"received\":" << status.receivedBytes << ",\"expected\":" << status.expectedBytes << "}}";
@@ -623,7 +628,7 @@ void TransferServer::RegisterRoutes()
         // Every retro game, also before its first start (saves can be uploaded ahead).
         bool first = true;
         for (const RetroGameInfo &game : RetroCatalogue()) {
-            const std::string folder = std::string(Storage::kGamesFolderName) + "/" + game.id;
+            const std::string folder = std::string(Storage::kSavesFolderName) + "/" + game.id;
             json << (first ? "" : ",") << "{\"id\":\"" << game.id << "\",\"title\":\"" << JsonEscape(game.title)
                  << "\",\"files\":" << FileListJson(storage_.ListUserFiles(folder)) << "}";
             first = false;
@@ -701,45 +706,41 @@ void TransferServer::RegisterRoutes()
         res.set_content(setup ? "installed" : "staged", kTextType);
     });
 
+    // The settings belong to the engine (Plus.ini, Settings.ini Game:plusDLC): the change waits
+    // in the channel and the engine applies it on its next frame (main.cpp), so nothing here
+    // writes files the engine also writes.
     server.Put("/api/settings", [this](const httplib::Request &req, httplib::Response &res) {
-        if (!req.has_param("plusEnabled") && !req.has_param("retroEnabled") && !req.has_param("maniaAudio")
-            && !req.has_param("maniaSimilarMusic") && !req.has_param("maniaRemixes"))
+        if (!req.has_param("plusEnabled") && !req.has_param("maniaAudio") && !req.has_param("maniaSimilarMusic")
+            && !req.has_param("maniaRemixes"))
             return Fail(res, 400, "Nothing to change.");
 
+        const bool setup     = setupMode_.load();
+        GameSettings changed = settings_.Current();
         std::string message;
+        const auto flag = [&req](const char *name) { return req.get_param_value(name) == "1"; };
+        // The audio settings are read when a retro game starts (or right away, before the game runs).
+        const std::string audioNote = setup ? "" : " Applies the next time a retro game starts.";
         if (req.has_param("plusEnabled")) {
-            const bool enabled = req.get_param_value("plusEnabled") == "1";
-            if (!config_.SetPlusEnabled(enabled))
-                return Fail(res, 500, "Could not save the setting.");
-            message = enabled ? "Plus content enabled. Restart to apply." : "Plus content disabled. Restart to apply.";
-        }
-        if (req.has_param("retroEnabled")) {
-            const bool enabled = req.get_param_value("retroEnabled") == "1";
-            if (!config_.SetRetroEnabled(enabled))
-                return Fail(res, 500, "Could not save the setting.");
-            message = enabled ? "Retro games enabled. Restart to apply." : "Retro games disabled. Restart to apply.";
+            changed.plusDLC = flag("plusEnabled");
+            message         = std::string(changed.plusDLC ? "Plus DLC on." : "Plus DLC off.")
+                      + (setup ? "" : " The game restarts to apply it.");
         }
         if (req.has_param("maniaAudio")) {
-            const bool enabled = req.get_param_value("maniaAudio") == "1";
-            if (!config_.SetManiaAudioEnabled(enabled))
-                return Fail(res, 500, "Could not save the setting.");
-            message = enabled ? "Sonic Mania's audio fills retro gaps. Restart to apply."
-                              : "Sonic Mania's audio no longer used in retro games. Restart to apply.";
+            changed.maniaAudio = flag("maniaAudio");
+            message = std::string(changed.maniaAudio ? "Sonic Mania's audio fills the retro games' gaps."
+                                                     : "Sonic Mania's audio no longer used in the retro games.")
+                      + audioNote;
         }
         if (req.has_param("maniaSimilarMusic")) {
-            const bool enabled = req.get_param_value("maniaSimilarMusic") == "1";
-            if (!config_.SetManiaSimilarMusicEnabled(enabled))
-                return Fail(res, 500, "Could not save the setting.");
-            message = enabled ? "Similar Mania music on. Restart to apply." : "Similar Mania music off. Restart to apply.";
+            changed.similarMusic = flag("maniaSimilarMusic");
+            message              = std::string(changed.similarMusic ? "Similar Mania music on." : "Similar Mania music off.") + audioNote;
         }
         if (req.has_param("maniaRemixes")) {
-            const bool enabled = req.get_param_value("maniaRemixes") == "1";
-            if (!config_.SetManiaRemixesEnabled(enabled))
-                return Fail(res, 500, "Could not save the setting.");
-            message = enabled ? "Sonic Mania remixes on. Restart to apply." : "Sonic Mania remixes off. Restart to apply.";
+            changed.maniaRemixes = flag("maniaRemixes");
+            message              = std::string(changed.maniaRemixes ? "Sonic Mania remixes on." : "Sonic Mania remixes off.") + audioNote;
         }
 
-        NoteRestartNeeded();
+        settings_.Request(changed);
         PublishEvent(message);
         res.set_content("saved", kTextType);
     });
@@ -796,7 +797,7 @@ void TransferServer::RegisterRetroRoutes()
 
     server.Get("/api/retro", [this](const httplib::Request &, httplib::Response &res) {
         std::ostringstream json;
-        json << "{\"enabled\":" << (config_.IsRetroEnabled() ? "true" : "false") << ",\"tv\":{\"folder\":\""
+        json << "{\"tv\":{\"folder\":\""
              << JsonEscape(retro_.TvPackFolder()) << "\",\"freeBytes\":" << storage_.FreeBytes()
              << ",\"safetyMarginBytes\":" << Storage::kSafetyMarginBytes << "},\"drives\":[";
         bool first = true;

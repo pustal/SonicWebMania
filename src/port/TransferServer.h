@@ -31,8 +31,8 @@ namespace swm
 {
 
 class Storage;
-class PortConfig;
 class RetroLibrary;
+class SettingsChannel;
 
 /** Snapshot of what the server is doing, for the TV screens to display. */
 struct TransferStatus {
@@ -58,7 +58,11 @@ public:
      */
     static constexpr std::uint16_t kPreferredPort = 47801;
 
-    TransferServer(Storage &storage, PortConfig &config, const RetroLibrary &retro, std::string pin);
+    /**
+     * @param settings Where the page's settings changes go, for the engine to
+     *                 apply on its thread (see SettingsChannel.h).
+     */
+    TransferServer(Storage &storage, SettingsChannel &settings, const RetroLibrary &retro, std::string pin);
     ~TransferServer();
 
     TransferServer(const TransferServer &)            = delete;
@@ -79,11 +83,12 @@ public:
     void SetSetupMode(bool setupMode) { setupMode_.store(setupMode); }
 
     /**
-     * The packs the engine reads from this session (Sonic Mania's, or a
-     * retro game's and the one lending it audio). The engine reopens a pack
-     * by its path for every file it reads, so these must stay where they are
-     * until the game is left: the page cannot move, replace or remove them
-     * (a new Data.rsdk for Sonic Mania is staged for the next start instead).
+     * The packs the engine may read from this session: Sonic Mania's and
+     * every retro pack found at launch, as the Plus menu can switch to any
+     * game. The engine reopens a pack by its path for every file it reads, so
+     * these must stay where they are until the app closes: the page cannot
+     * move, replace or remove them (a new copy is staged for the next start
+     * instead).
      */
     void SetPacksInUse(const std::vector<std::string> &paths);
 
@@ -112,7 +117,7 @@ private:
     bool IsPackInUse(const std::string &path) const;
 
     Storage &storage_;
-    PortConfig &config_;
+    SettingsChannel &settings_;
     const RetroLibrary &retro_;
     const std::string pin_;
 

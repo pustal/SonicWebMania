@@ -4,7 +4,8 @@
 # external/RSDKv5-Decompilation/CMakeLists.txt through its
 # include(platforms/${PLATFORM}.cmake) line (the top-level CMakeLists.txt sets
 # PLATFORM to a relative path that lands here), so the engine submodule needs
-# no CMake changes.
+# no changes at all: the port uses its Plus module's platform API
+# (RSDK/Plus/Plus.hpp) and an SDL event filter (src/port/PortRuntime.h).
 #
 # Runs in the engine's directory scope: RETRO_FILES is the engine source list.
 # Expects these from the top-level project:
@@ -17,11 +18,9 @@ set(RETRO_SUBSYSTEM "SDL2" CACHE STRING "The subsystem to use" FORCE)
 
 # Our launcher (src/main.cpp) replaces the engine's main().
 list(REMOVE_ITEM RETRO_FILES RSDKv5/main.cpp)
-add_executable(RetroEngine ${RETRO_FILES} "${SWM_ROOT}/src/main.cpp" "${SWM_ROOT}/src/RetroSaves.cpp"
-               "${SWM_ROOT}/src/RetroAudio.cpp")
+add_executable(RetroEngine ${RETRO_FILES} "${SWM_ROOT}/src/main.cpp")
 
 target_compile_definitions(RetroEngine PRIVATE
-    RETRO_WEBOS_PORT=1
     $<$<BOOL:${SWM_TARGET_WEBOS}>:SWM_TARGET_WEBOS=1>
 )
 

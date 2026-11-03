@@ -2,24 +2,20 @@
  * @file main.cpp
  * @brief Entry point of the webOS build: prepares storage, starts the transfer
  *        server, shows the setup screen when no game data is installed, then
- *        hands over to the RSDKv5 engine running Sonic Mania or, when retro
- *        mode is on, one of the retro games (see port/RetroGames.h).
+ *        hands over to the engine (RSDKv5-Decompilation-Plus) running Sonic
+ *        Mania and, through its Plus module, the retro games.
  *
- * Which game runs:
- *   1. the one named by --swm-game=<id> (how the Back menu's "Retro games"
- *      page and "Restart game" relaunch the app);
- *   2. otherwise the last game left normally (port.ini lastGame);
- *   3. otherwise Sonic Mania, or the first playable retro game when there is
- *      no Sonic Mania data (Sonic Mania is optional: the app can be used for
- *      the retro games alone, which are then offered without the opt-in).
- * A game id that cannot be played (its pack was removed, retro mode was
- * switched off) falls through to the next rule.
+ * The engine's Plus module does the games' side: which game starts (the last
+ * one played, Plus.ini lastGame), switching games from the Plus menu (Back on
+ * the remote), the retro games' packs, saves, modes, achievements and Sonic
+ * Mania's audio for them, and the Plus DLC opt-in (off by default). This file
+ * tells it what only the TV app knows: the packs on USB drives, the transfer
+ * page's address, and settings changed on the page (applied once per frame,
+ * on the engine's thread). The remote's buttons are mapped by PortRuntime.
  *
  * Replaces RSDKv5/main.cpp from the engine (excluded in cmake/RSDKPlatform-webOS.cmake).
  */
 #include "RSDK/Core/RetroEngine.hpp"
-#include "RetroAudio.h"
-#include "RetroSaves.h"
 
 // Sonic Mania is linked statically (GAME_STATIC), so its logic entry point
 // comes from the game's GameMain.h rather than from a loaded library.
@@ -30,10 +26,11 @@
 
 #include "port/IniEdit.h"
 #include "port/NetInfo.h"
-#include "port/PortConfig.h"
+#include "port/PlusFiles.h"
 #include "port/PortRuntime.h"
 #include "port/RemoteInput.h"
 #include "port/RetroGames.h"
+#include "port/SettingsChannel.h"
 #include "port/SetupScreen.h"
 #include "port/Storage.h"
 #include "port/TransferServer.h"
@@ -47,11 +44,12 @@
 #include <string>
 #include <vector>
 
+#if !RETRO_USE_PLUS
+#error "SonicWebMania needs the engine's Plus module: RETRO_PLUS, RETRO_MOD_LOADER and RETRO_REVISION 3 (see CMakeLists.txt)"
+#endif
+
 namespace
 {
-
-/** Command-line option naming the game to start; never passed on to the engine. */
-constexpr const char *kGameOption = "--swm-game=";
 
 /**
  * Engine settings suited to a TV, written only on first launch (the engine
@@ -60,6 +58,7 @@ constexpr const char *kGameOption = "--swm-game=";
 constexpr const char *kDefaultSettings = "[Game]\n"
                                          "devMenu=n\n"
                                          "faceButtonFlip=n\n"
+                                         "plusDLC=n\n"
                                          "\n"
                                          "[Video]\n"
                                          "windowed=n\n"
@@ -89,64 +88,97 @@ void WriteDefaultSettingsIfMissing(const swm::Storage &storage)
     out << kDefaultSettings;
 }
 
-/**
- * Copies the engine's achievement list for the Back menu. The engine registers
- * Sonic Mania's achievements at start-up and updates them as the game unlocks
- * them (saved in Achievements.bin), so this always reflects the current state.
- */
-std::vector<swm::AchievementEntry> ReadAchievements()
+/** The engine's settings as the page sees them, and back. */
+swm::GameSettings ToGameSettings(const RSDK::Plus::Settings &settings)
 {
-    std::vector<swm::AchievementEntry> entries;
-    entries.reserve(RSDK::achievementList.size());
-    for (const RSDK::AchievementInfo &info : RSDK::achievementList)
-        entries.push_back(swm::AchievementEntry{ info.name, info.description, info.achieved != 0 });
-    return entries;
+    swm::GameSettings converted;
+    converted.plusDLC      = settings.plusDLC;
+    converted.maniaAudio   = settings.maniaAudio;
+    converted.similarMusic = settings.similarMusic;
+    converted.maniaRemixes = settings.maniaRemixes;
+    return converted;
 }
+
+RSDK::Plus::Settings ToPlusSettings(const swm::GameSettings &settings)
+{
+    RSDK::Plus::Settings converted;
+    converted.plusDLC      = settings.plusDLC;
+    converted.maniaAudio   = settings.maniaAudio;
+    converted.similarMusic = settings.similarMusic;
+    converted.maniaRemixes = settings.maniaRemixes;
+    return converted;
+}
+
+/** What the engine's callbacks (plain function pointers) reach. */
+struct Session {
+    swm::SettingsChannel *settings = nullptr;
+    bool restartRequested          = false; ///< "Restart game" was chosen in the Plus menu.
+};
+Session session;
 
 /**
- * The retro games the player can start now. Next to Sonic Mania they are an
- * opt-in (port.ini retroEnabled); without Sonic Mania's data they are what
- * the app is for, so they are always offered.
+ * Once per frame on the engine's thread (RSDK::Plus::SetFrameCallback()):
+ * the remote's mapping, then a settings change asked for on the web page,
+ * then the settings as they are now, for the page to show.
  */
-std::vector<swm::RetroGame> PlayableRetroGames(const swm::PortConfig &config, const swm::RetroLibrary &retro, bool maniaReady)
+void OnEngineFrame()
 {
-    return config.IsRetroEnabled() || !maniaReady ? retro.ScanPlayable() : std::vector<swm::RetroGame>{};
+    swm::PortRuntime::Instance().OnFrame(RSDK::Plus::MenuOpen());
+
+    swm::GameSettings requested;
+    if (session.settings->TakeRequest(&requested))
+        RSDK::Plus::ApplySettings(ToPlusSettings(requested));
+    session.settings->Publish(ToGameSettings(RSDK::Plus::CurrentSettings()));
 }
 
-/** True when @p id is Sonic Mania with its data installed, or one of @p retroGames. */
-bool CanPlay(const std::string &id, bool maniaReady, const std::vector<swm::RetroGame> &retroGames)
+/**
+ * The Plus menu's "Restart game": closes the engine, and main() starts the
+ * app again, which applies the files the page staged (a new Data.rsdk or
+ * pack, saves) and finds packs added since.
+ */
+void RequestRestart()
 {
-    if (id == swm::RetroLibrary::kManiaId)
-        return maniaReady;
-    for (const swm::RetroGame &game : retroGames) {
-        if (id == game.info.id)
-            return true;
+    session.restartRequested     = true;
+    RSDK::RenderDevice::isRunning = false;
+}
+
+/** Every pack the engine may read this session (see TransferServer::SetPacksInUse()). */
+std::vector<std::string> PacksInUse(const std::string &maniaPack, const swm::RetroLibrary &retro)
+{
+    std::vector<std::string> packs;
+    if (!maniaPack.empty())
+        packs.push_back(maniaPack);
+    for (const swm::RetroGame &game : retro.Scan()) {
+        for (const swm::RetroPack *pack : { &game.origins, &game.classic }) {
+            if (pack->state == swm::PackState::Ready || pack->state == swm::PackState::Unsupported)
+                packs.push_back(pack->path);
+        }
     }
-    return false;
+    return packs;
 }
 
-/** Picks the game to start (see the file comment). @return "" when nothing can be played. */
-std::string ChooseGame(const std::string &requested, const std::string &lastGame, bool maniaReady,
-                       const std::vector<swm::RetroGame> &retroGames)
+/** Tells the Plus module what only the app knows: the USB drives' packs, the page's address, "Restart game". */
+void ConfigurePlus(const swm::RetroLibrary &retro, const swm::TransferServer *server)
 {
-    for (const std::string &candidate : { requested, lastGame }) {
-        if (!candidate.empty() && CanPlay(candidate, maniaReady, retroGames))
-            return candidate;
+    const std::vector<std::string> folders = retro.PackFolders();
+    for (std::size_t i = 1; i < folders.size(); ++i) // [0] is the TV's, which the engine finds itself.
+        RSDK::Plus::AddPackFolder(folders[i]);
+
+    RSDK::Plus::PlatformTexts texts;
+    const std::string address = swm::FindLanAddress();
+    if (server && !address.empty()) {
+        const std::string page = "http://" + address + ":" + std::to_string(server->Port());
+        texts.menuInfo         = "Transfer page: " + page + "  PIN " + server->Pin();
+        texts.packHint         = "Add retro packs from the transfer page on a phone or computer: " + page
+                         + ". Then choose Restart game.";
     }
-    if (maniaReady)
-        return swm::RetroLibrary::kManiaId;
-    return retroGames.empty() ? std::string() : std::string(retroGames.front().info.id);
-}
-
-/** The Back menu's game list: Sonic Mania (when installed) and the playable retro games. */
-std::vector<swm::GameChoice> BuildGameChoices(bool maniaReady, const std::vector<swm::RetroGame> &retroGames)
-{
-    std::vector<swm::GameChoice> choices;
-    if (maniaReady)
-        choices.push_back(swm::GameChoice{ swm::RetroLibrary::kManiaId, "Sonic Mania", "" });
-    for (const swm::RetroGame &game : retroGames)
-        choices.push_back(swm::GameChoice{ game.info.id, game.info.title, game.ModeDescription() });
-    return choices;
+    else {
+        texts.menuInfo = "Connect the TV to a network to reach the transfer page.";
+        texts.packHint = "Add retro packs from the transfer page (the TV must be on a network), then choose Restart game.";
+    }
+    RSDK::Plus::SetPlatformTexts(texts);
+    RSDK::Plus::AddMenuAction("Restart game", &RequestRestart);
+    RSDK::Plus::SetFrameCallback(&OnEngineFrame);
 }
 
 /** Same as RSDK_main() in RSDKv5/main.cpp: link the game logic and run the engine loop. */
@@ -167,18 +199,6 @@ int32 main(int32 argc, char *argv[])
 {
     swm::RemoteInput::ApplyPlatformHints();
 
-    // Our own option is taken out; everything else goes to the engine.
-    std::string requestedGame;
-    std::vector<char *> engineArgv;
-    for (int32 i = 0; i < argc; ++i) {
-        if (i > 0 && std::strncmp(argv[i], kGameOption, std::strlen(kGameOption)) == 0)
-            requestedGame = argv[i] + std::strlen(kGameOption);
-        else
-            engineArgv.push_back(argv[i]);
-    }
-    const int32 engineArgc = static_cast<int32>(engineArgv.size());
-    engineArgv.push_back(nullptr);
-
     // The engine reads and writes everything relative to the working directory.
     swm::Storage storage = swm::Storage::Resolve();
     if (chdir(storage.Root().c_str()) != 0) {
@@ -192,9 +212,11 @@ int32 main(int32 argc, char *argv[])
         std::printf("SonicWebMania: applied %d file(s) uploaded or moved during the last session\n", applied);
     storage.TrimLog();
     WriteDefaultSettingsIfMissing(storage);
+    swm::MigrateEarlierVersion(storage, kDefaultSettings);
 
-    swm::PortConfig config(storage.PathFor(swm::PortConfig::kFileName));
-    swm::TransferServer server(storage, config, retro, swm::GeneratePin());
+    swm::SettingsChannel settings(swm::ReadSavedSettings(storage));
+    session.settings = &settings;
+    swm::TransferServer server(storage, settings, retro, swm::GeneratePin());
     const bool serverRunning = server.Start();
     if (serverRunning)
         std::printf("SonicWebMania: transfer page on port %u, PIN %s\n", static_cast<unsigned>(server.Port()), server.Pin().c_str());
@@ -202,93 +224,38 @@ int32 main(int32 argc, char *argv[])
         std::fprintf(stderr, "SonicWebMania: file transfer server could not bind a port\n");
     std::fflush(stdout);
 
-    // Sonic Mania's pack, on the TV or a USB drive ("" when not installed).
-    std::string maniaPack                  = storage.DataPackPath();
-    bool maniaReady                        = !maniaPack.empty();
-    std::vector<swm::RetroGame> retroGames = PlayableRetroGames(config, retro, maniaReady);
-    if (!maniaReady && retroGames.empty()) {
+    // Sonic Mania's pack, on the TV or a USB drive ("" when not installed). It is optional:
+    // the app can be used for the retro games alone.
+    std::string maniaPack = storage.DataPackPath();
+    const std::function<bool()> retroReady = [&retro] { return !retro.ScanPlayable().empty(); };
+    if (maniaPack.empty() && !retroReady()) {
         server.SetSetupMode(true);
-        // Sonic Mania is not installed while the setup screen shows, so any playable retro game will do.
-        const std::function<bool()> retroReady = [&config, &retro] { return !PlayableRetroGames(config, retro, false).empty(); };
         const swm::SetupResult result = swm::RunSetupScreen(storage, serverRunning ? &server : nullptr, retroReady);
         if (result != swm::SetupResult::DataReady) {
             server.Stop();
             return result == swm::SetupResult::Failed ? 1 : 0;
         }
-        maniaPack  = storage.DataPackPath();
-        maniaReady = !maniaPack.empty();
-        retroGames = PlayableRetroGames(config, retro, maniaReady);
+        maniaPack = storage.DataPackPath();
     }
 
-    std::string game = ChooseGame(requestedGame, config.LastGame(), maniaReady, retroGames);
-    // The packs the engine will read from, which the web page must not move or replace meanwhile.
-    std::vector<std::string> packsInUse;
-    if (game != swm::RetroLibrary::kManiaId) {
-        // A retro game runs in its own folder, whose Settings.ini points at its packs.
-        const swm::RetroGame *chosen = nullptr;
-        for (const swm::RetroGame &candidate : retroGames) {
-            if (game == candidate.info.id)
-                chosen = &candidate;
-        }
-        // Sonic Mania's pack lends the music and sounds the game's packs lack (see RetroAudio.h).
-        const std::string audioPack = config.IsManiaAudioEnabled() ? maniaPack : std::string();
-        std::string error           = "no game to play";
-        if (chosen && retro.PrepareLaunch(*chosen, kDefaultSettings, audioPack, &error)
-            && chdir(retro.WorkFolder(game).c_str()) == 0) {
-            std::printf("SonicWebMania: starting %s (%s%s)\n", chosen->info.title, chosen->ModeDescription().c_str(),
-                        audioPack.empty() ? "" : ", missing audio from Sonic Mania");
-            for (const swm::RetroPack *pack : { &chosen->origins, &chosen->classic }) {
-                if (pack->state == swm::PackState::Ready)
-                    packsInUse.push_back(pack->path);
-            }
-            if (!audioPack.empty())
-                packsInUse.push_back(audioPack);
-            swm::ConfigureRetroAudio(game, config.IsManiaSimilarMusicEnabled(), config.IsManiaRemixesEnabled());
-        }
-        else {
-            std::fprintf(stderr, "SonicWebMania: cannot start %s: %s\n", game.c_str(), error.c_str());
-            if (!maniaReady || chdir(storage.Root().c_str()) != 0) {
-                server.Stop();
-                return 1;
-            }
-            game = swm::RetroLibrary::kManiaId;
-        }
-    }
-    if (game == swm::RetroLibrary::kManiaId) {
-        // The pack may have moved between the TV and a USB drive since the last start.
-        std::string error;
-        if (!swm::UpdateIniFile(storage.PathFor("Settings.ini"), kDefaultSettings, "Game", { { "dataFile", maniaPack } }, &error))
-            std::fprintf(stderr, "SonicWebMania: %s\n", error.c_str());
-        packsInUse.push_back(maniaPack);
-    }
-    server.SetPacksInUse(packsInUse);
+    // The pack may have moved between the TV and a USB drive since the last start. Without it,
+    // the engine starts the first retro game instead (its Plus module).
+    std::string error;
+    const std::string dataFile = maniaPack.empty() ? std::string("Data.rsdk") : maniaPack;
+    if (!swm::UpdateIniFile(storage.PathFor("Settings.ini"), kDefaultSettings, "Game", { { "dataFile", dataFile } }, &error))
+        std::fprintf(stderr, "SonicWebMania: %s\n", error.c_str());
+
+    server.SetPacksInUse(PacksInUse(maniaPack, retro));
+    server.SetSetupMode(false);
+    ConfigurePlus(retro, serverRunning ? &server : nullptr);
     std::fflush(stdout);
 
-    // Forget the game while it runs: if it crashes, the next launch does not start it again.
-    config.SetLastGame("");
-
-    server.SetSetupMode(false);
-    swm::PortRuntime &runtime = swm::PortRuntime::Instance();
-    runtime.SetGames(BuildGameChoices(maniaReady, retroGames), game);
-    runtime.Configure(serverRunning ? &server : nullptr, swm::FindLanAddress(), config.IsPlusEnabled(), &ReadAchievements);
-
-    // Sonic Origins' coins, shared by the retro games (listed with the saves on the web page).
-    swm::ConfigureRetroSession(storage.PathFor("RetroCoins.ini"), game);
-
-    const int32 exitCode = RunEngine(engineArgc, engineArgv.data());
-    swm::FinishRetroSession();
+    const int32 exitCode = RunEngine(argc, argv);
     server.Stop();
 
-    // Left normally: remember the game (or the one chosen in the menu) for the next launch.
-    const std::string nextGame = runtime.RestartRequested() ? runtime.NextGame() : game;
-    config.SetLastGame(nextGame);
-
-    if (runtime.RestartRequested()) {
+    if (session.restartRequested) {
         // A fresh process is the only clean way to reset all of the engine's globals.
-        std::string gameOption          = std::string(kGameOption) + nextGame;
-        std::vector<char *> restartArgv = { argv[0], &gameOption[0] };
-        restartArgv.insert(restartArgv.end(), engineArgv.begin() + 1, engineArgv.end()); // Includes the final null.
-        execv("/proc/self/exe", restartArgv.data());
+        execv("/proc/self/exe", argv);
         std::perror("SonicWebMania: restart failed");
     }
 

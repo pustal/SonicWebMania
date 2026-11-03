@@ -15,13 +15,12 @@
  *   Green = A, Red = B, Blue = X, Yellow = Y, 0 = Start/Pause.
  * (In Sonic Mania both A and B jump, as they do on a controller.)
  * The remote's own arrow keys and OK button keep working as arrows and Start.
+ * Back (and Exit) opens the engine's Plus menu, and goes back a page in it.
  */
 #ifndef SWM_REMOTE_INPUT_H
 #define SWM_REMOTE_INPUT_H
 
 #include <SDL.h>
-
-#include <string>
 
 namespace swm
 {
@@ -46,7 +45,7 @@ namespace RemoteInput
  */
 bool RewriteForEngine(SDL_Event *event);
 
-/** True when @p event is a press that should open the in-game menu (Back, Exit, Guide). */
+/** True when @p event is a press that should open a menu (Back, Exit, Guide); the setup screen uses it. */
 bool IsMenuOpenRequest(const SDL_Event &event);
 
 /** Translates a key or controller press into a menu action (remote, keyboard or pad). */
@@ -55,12 +54,15 @@ MenuAction ToMenuAction(const SDL_Event &event);
 /** Applies the SDL hints that let a native webOS app receive Back/Exit and hide the pointer. */
 void ApplyPlatformHints();
 
+/** True for a press or release of a key that opens the menu (Back, Exit, or Escape on a keyboard). */
+bool IsMenuKey(const SDL_Event &event);
+
 /**
- * Describes a key or controller press for the button test page, e.g.
- * "Red (code 486) -> B" or "Pad: a -> A". Returns an empty string for
- * events that are not presses.
+ * Rewrites a menu key event (IsMenuKey()) for the engine's Plus menu, which
+ * opens with Select and goes back a page with B: into Tab (Select) when the
+ * menu is closed, into S (B) when it is open (@p menuOpen).
  */
-std::string DescribePress(const SDL_Event &event);
+void RewriteMenuKey(SDL_Event *event, bool menuOpen);
 
 } // namespace RemoteInput
 } // namespace swm

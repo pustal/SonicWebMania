@@ -5,7 +5,6 @@
 #include "RemoteInput.h"
 
 #include <array>
-#include <cctype>
 
 namespace swm
 {
@@ -161,81 +160,20 @@ void ApplyPlatformHints()
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 }
 
-namespace
+bool IsMenuKey(const SDL_Event &event)
 {
-
-/**
- * The game button an engine-side key stands for, in RSDK's default player-1
- * keyboard layout (see the file header). Empty when the key does nothing.
- */
-std::string GameButtonForKey(SDL_Scancode scancode)
-{
-    switch (scancode) {
-        case SDL_SCANCODE_UP: return "Up";
-        case SDL_SCANCODE_DOWN: return "Down";
-        case SDL_SCANCODE_LEFT: return "Left";
-        case SDL_SCANCODE_RIGHT: return "Right";
-        case SDL_SCANCODE_A: return "A";
-        case SDL_SCANCODE_S: return "B";
-        case SDL_SCANCODE_D: return "C";
-        case SDL_SCANCODE_Q: return "X";
-        case SDL_SCANCODE_W: return "Y";
-        case SDL_SCANCODE_E: return "Z";
-        case SDL_SCANCODE_RETURN: return "Start";
-        case SDL_SCANCODE_TAB: return "Select";
-        default: return {};
-    }
+    if (!IsKeyEvent(event))
+        return false;
+    const int scancode = ScancodeOf(event);
+    return scancode == kWebOSBack || scancode == kWebOSExit || scancode == SDL_SCANCODE_ESCAPE || scancode == SDL_SCANCODE_AC_BACK;
 }
 
-} // namespace
-
-/** Names for the remote's special keys, which SDL builds other than SDL-webOS do not know. */
-const char *RemoteKeyName(int scancode)
+void RewriteMenuKey(SDL_Event *event, bool menuOpen)
 {
-    switch (scancode) {
-        case kWebOSBack: return "Back";
-        case kWebOSRed: return "Red";
-        case kWebOSGreen: return "Green";
-        case kWebOSYellow: return "Yellow";
-        case kWebOSBlue: return "Blue";
-        case kWebOSExit: return "Exit";
-        default: return nullptr;
-    }
-}
-
-std::string DescribePress(const SDL_Event &event)
-{
-    if (event.type == SDL_KEYDOWN && !event.key.repeat) {
-        const int scancode = ScancodeOf(event);
-        const char *name   = RemoteKeyName(scancode);
-        if (!name)
-            name = SDL_GetScancodeName(event.key.keysym.scancode);
-        std::string text = (name && *name) ? name : "Key";
-        text += " (code " + std::to_string(scancode) + ")";
-
-        if (IsMenuOpenRequest(event))
-            return text + " -> menu";
-
-        SDL_Event rewritten = event;
-        RewriteForEngine(&rewritten);
-        const std::string button = GameButtonForKey(rewritten.key.keysym.scancode);
-        return text + " -> " + (button.empty() ? "nothing" : button);
-    }
-
-    if (event.type == SDL_CONTROLLERBUTTONDOWN) {
-        const auto button = static_cast<SDL_GameControllerButton>(event.cbutton.button);
-        const char *name  = SDL_GameControllerGetStringForButton(button);
-        std::string label = name ? name : "button";
-        // The engine reads pads itself, using the Xbox names (a, b, x, y, ...).
-        std::string game = label;
-        for (char &c : game)
-            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        if (button == SDL_CONTROLLER_BUTTON_BACK || button == SDL_CONTROLLER_BUTTON_GUIDE)
-            game = "menu";
-        return "Pad: " + label + " -> " + game;
-    }
-
-    return {};
+    // RSDK's player-1 keyboard layout: Tab is Select, S is B.
+    const SDL_Scancode key     = menuOpen ? SDL_SCANCODE_S : SDL_SCANCODE_TAB;
+    event->key.keysym.scancode = key;
+    event->key.keysym.sym      = SDL_GetKeyFromScancode(key);
 }
 
 } // namespace RemoteInput

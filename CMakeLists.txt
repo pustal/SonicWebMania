@@ -1,5 +1,8 @@
 # SonicWebMania: the Sonic Mania decompilation (RSDKv5) packaged as a native
 # LG webOS TV app, plus a desktop Linux build of the same code for testing.
+# The engine and the game are the Plus forks (RSDKv5-Decompilation-Plus,
+# Sonic-Mania-Decompilation-Plus), whose Plus module also plays Sonic 1, 2 and
+# CD from the player's packs; this project adds the TV app around them.
 #
 #   webOS:   cmake -B build-webos -DCMAKE_TOOLCHAIN_FILE=<sdk>/share/buildroot/toolchainfile.cmake
 #            cmake --build build-webos && cmake --build build-webos --target webos-package
@@ -8,7 +11,7 @@
 # See README.md for the full walkthrough.
 
 cmake_minimum_required(VERSION 3.21)
-project(SonicWebMania VERSION 2.2.1 LANGUAGES C CXX)
+project(SonicWebMania VERSION 3.0.0 LANGUAGES C CXX)
 
 set(SWM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${SWM_ROOT}/cmake")
@@ -33,10 +36,10 @@ set(SWM_APP_ID "org.sonicwebmania.app" CACHE STRING "webOS application id")
 option(SWM_ENGINE_LOG "Let the engine write log.txt (off by default to spare TV storage)" OFF)
 
 # ---------------------------------------------------------------------------
-# Submodules must be present (and the engine patch applied).
+# Submodules must be present.
 # ---------------------------------------------------------------------------
-set(SWM_RSDK_DIR "${SWM_ROOT}/external/RSDKv5-Decompilation")
-set(SWM_MANIA_DIR "${SWM_ROOT}/external/Sonic-Mania-Decompilation")
+set(SWM_RSDK_DIR "${SWM_ROOT}/external/RSDKv5-Decompilation-Plus")
+set(SWM_MANIA_DIR "${SWM_ROOT}/external/Sonic-Mania-Decompilation-Plus")
 foreach(required
         "${SWM_RSDK_DIR}/CMakeLists.txt"
         "${SWM_RSDK_DIR}/dependencies/all/tinyxml2/tinyxml2.cpp"
@@ -46,13 +49,15 @@ foreach(required
         "${SWM_ROOT}/external/theora/lib/decode.c")
     if(NOT EXISTS "${required}")
         message(FATAL_ERROR "Missing ${required}. Run: git submodule update --init && "
-                            "git -C external/RSDKv5-Decompilation submodule update --init")
+                            "git -C external/RSDKv5-Decompilation-Plus submodule update --init")
     endif()
 endforeach()
 
-file(READ "${SWM_RSDK_DIR}/RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp" _swm_render_device)
-if(NOT _swm_render_device MATCHES "RETRO_WEBOS_PORT")
-    message(FATAL_ERROR "The engine patch is not applied. Run: scripts/apply-patches.sh")
+# The engine's platform API this port uses (RSDK::Plus::AddPackFolder() and friends).
+file(READ "${SWM_RSDK_DIR}/RSDKv5/RSDK/Plus/Plus.hpp" _swm_plus_header)
+if(NOT _swm_plus_header MATCHES "AddPackFolder")
+    message(FATAL_ERROR "external/RSDKv5-Decompilation-Plus is too old: it lacks the Plus module's platform API. "
+                        "Run: git submodule update --init")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -119,15 +124,14 @@ add_custom_command(
 add_library(swm_port STATIC
     src/port/BitmapFont.cpp
     src/port/Md5.cpp
-    src/port/Achievements.h
     src/port/NetInfo.cpp
-    src/port/PortConfig.cpp
+    src/port/PlusFiles.cpp
     src/port/PortRuntime.cpp
     src/port/RemoteInput.cpp
-    src/port/RetroAchievements.cpp
     src/port/IniEdit.cpp
     src/port/RetroGames.cpp
     src/port/RsdkPack.cpp
+    src/port/SettingsChannel.cpp
     src/port/SetupScreen.cpp
     src/port/Storage.cpp
     src/port/TextRenderer.cpp
@@ -175,9 +179,12 @@ set_target_properties(${GAME_NAME} PROPERTIES OUTPUT_NAME Game)
 # ---------------------------------------------------------------------------
 set(PLATFORM "../../../cmake/RSDKPlatform-webOS" CACHE STRING "RSDK platform file" FORCE)
 set(RETRO_REVISION 3 CACHE STRING "RSDK revision (3 = v5U)" FORCE)
-set(RETRO_MOD_LOADER OFF CACHE BOOL "No mod loader on the TV build" FORCE)
-# Plus stays available to the engine; the port gates it behind an opt-in that
-# is off by default (see WebOSPort_IsPlusEnabled), as the decomp licence requires.
+# The engine's Plus module (the retro games, the Plus menu) needs v5U and the mod loader.
+set(RETRO_MOD_LOADER ON CACHE BOOL "Needed by the engine's Plus module" FORCE)
+set(RETRO_PLUS ON CACHE BOOL "The engine's Plus module: retro games, the Plus menu" FORCE)
+# The official Plus DLCs stay available, but off until the player turns them on
+# (Settings.ini Game:plusDLC, the web page or the Plus menu), as the decompilation
+# licence requires of builds given to anyone.
 set(RETRO_DISABLE_PLUS OFF CACHE BOOL "" FORCE)
 if(SWM_ENGINE_LOG)
     set(RETRO_DISABLE_LOG OFF CACHE BOOL "" FORCE)

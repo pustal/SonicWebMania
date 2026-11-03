@@ -12,9 +12,9 @@
  *
  * How a game is played depends on which packs are there:
  *   - origins + classic: the Origins game, with the classic pack loaded second
- *     so its music and sound fill in what the Origins pack lacks
- *     (Settings.ini Game:extraDataFile, see patches/rsdk/0002). The sounds
- *     Origins added (the Drop Dash, Knuckles' and Amy's moves) stay silent;
+ *     so its music and sound fill in what the Origins pack lacks. Sonic
+ *     Mania's pack, when installed, lends the sounds Origins added (the Drop
+ *     Dash, Knuckles' and Amy's moves);
  *   - origins only: the Origins game without sound;
  *   - classic only: the classic game, when its scripts are the mobile
  *     bytecode the engine runs (the 2013 Sonic 1 and 2 packs, and Sonic CD's
@@ -30,8 +30,11 @@
  * `<game>-origins.rsdk` and `<game>-classic.rsdk` (for example
  * `sonic1-origins.rsdk`). The web page names uploads this way.
  *
- * Each game runs in its own working folder, `<data>/games/<game>/`, which
- * holds its Settings.ini, saves and log, so the games never share a save.
+ * The games themselves are run by the engine's Plus module
+ * (RSDKv5-Decompilation-Plus, RSDK/Plus/), which looks for the packs in the
+ * same folders (main() adds the USB drives' with RSDK::Plus::AddPackFolder())
+ * and keeps each game's saves in `<data>/retro/<game>/`. This class is what
+ * the web page and the setup screen know of them.
  */
 #ifndef SWM_RETRO_GAMES_H
 #define SWM_RETRO_GAMES_H
@@ -101,7 +104,7 @@ public:
     static constexpr const char *kPackFolderName = "retro";
     /** Folder created at the top of a USB drive (shared with Sonic Mania's pack, see Storage). */
     static constexpr const char *kUsbFolderName = "SonicWebMania";
-    /** Id used for Sonic Mania itself in menus, port.ini and --swm-game. */
+    /** Id used for Sonic Mania itself (as in the engine's Plus.ini). */
     static constexpr const char *kManiaId = "mania";
 
     explicit RetroLibrary(const Storage &storage);
@@ -123,23 +126,6 @@ public:
 
     /** `<mount>/SonicWebMania/retro`: where packs are kept on a USB drive. */
     static std::string UsbPackFolder(const std::string &mountPoint);
-
-    /** `<data>/games/<id>`: the game's working folder (settings, saves, log). */
-    std::string WorkFolder(const std::string &id) const;
-
-    /**
-     * Creates the game's working folder and points its Settings.ini at the
-     * packs found: Game:dataFile, Game:extraDataFile, Game:audioDataFile and
-     * Game:gameType are rewritten at every launch (packs may have moved
-     * between the TV and a drive); every other setting the player changed is
-     * kept. A new Settings.ini starts from @p defaultSettings.
-     *
-     * @param audioPack Sonic Mania's pack, lending the music and sound effects
-     *                  the game's packs lack (see RetroAudio.h); "" for none.
-     * @return False with a message in @p error if the folder or file could not be written.
-     */
-    bool PrepareLaunch(const RetroGame &game, const std::string &defaultSettings, const std::string &audioPack,
-                       std::string *error) const;
 
     /** Reads the start of @p path and classifies it (see PackState). */
     static PackState Inspect(const std::string &path, char *version);

@@ -29,8 +29,7 @@ fi
 # Top-level submodules, plus the engine's own (tinyxml2, stb). The game's nested
 # copy of the engine is not needed, so this is deliberately not --recursive.
 git -C "${repo_root}" submodule update --init
-git -C "${repo_root}/external/RSDKv5-Decompilation" submodule update --init
-"${repo_root}/scripts/apply-patches.sh"
+git -C "${repo_root}/external/RSDKv5-Decompilation-Plus" submodule update --init
 
 generator=()
 if command -v ninja >/dev/null 2>&1; then

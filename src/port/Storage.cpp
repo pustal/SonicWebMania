@@ -4,7 +4,6 @@
  */
 #include "Storage.h"
 
-#include "PortConfig.h"
 #include "UsbDrives.h"
 
 #include <algorithm>
@@ -177,7 +176,7 @@ int Storage::ApplyPendingFiles() const
     }
 
     // Saves and settings uploaded during the previous session: the data
-    // directory's in incoming/, a retro game's in incoming/games/<id>/.
+    // directory's in incoming/, a retro game's in incoming/retro/<id>/.
     const auto moveFiles = [&applied](const fs::path &from, const std::string &to) {
         std::error_code listError;
         for (const fs::directory_entry &entry : fs::directory_iterator(from, listError)) {
@@ -195,11 +194,11 @@ int Storage::ApplyPendingFiles() const
     const fs::path incoming = IncomingDir();
     if (fs::is_directory(incoming, ec)) {
         moveFiles(incoming, root_);
-        for (const fs::directory_entry &game : fs::directory_iterator(incoming / kGamesFolderName, ec)) {
+        for (const fs::directory_entry &game : fs::directory_iterator(incoming / kSavesFolderName, ec)) {
             const std::string id = game.path().filename().string();
             std::error_code typeError;
             if (game.is_directory(typeError) && IsPlainName(id))
-                moveFiles(game.path(), PathFor(std::string(kGamesFolderName) + "/" + id));
+                moveFiles(game.path(), PathFor(std::string(kSavesFolderName) + "/" + id));
         }
     }
 
@@ -244,7 +243,7 @@ bool Storage::IsPlainName(const std::string &name)
 bool Storage::IsAllowedUserFileName(const std::string &name)
 {
     constexpr std::size_t kMaxNameLength = 64;
-    if (name.empty() || name.size() > kMaxNameLength || name == PortConfig::kFileName)
+    if (name.empty() || name.size() > kMaxNameLength)
         return false;
 
     const std::size_t dot = name.rfind('.');

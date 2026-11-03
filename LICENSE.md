@@ -24,8 +24,13 @@ decompilation projects that are not ours, by Rubberduckycooly and chuliRMG
 - RSDKv5 Decompilation: https://github.com/RSDKModding/RSDKv5-Decompilation
 - Sonic Mania Decompilation: https://github.com/RSDKModding/Sonic-Mania-Decompilation
 
+It uses them through their Plus forks, which are under the same licences:
+
+- RSDKv5-Decompilation-Plus: https://github.com/pustal/RSDKv5-Decompilation-Plus
+- Sonic-Mania-Decompilation-Plus: https://github.com/pustal/Sonic-Mania-Decompilation-Plus
+
 This licence covers the port's own work: the files in `src/`, `web/`,
-`cmake/`, `scripts/`, `webos/` and `patches/`, and the build files and
+`cmake/`, `scripts/`, `tools/` and `webos/`, and the build files and
 documentation at the top of the repository. It follows the decompilations'
 licences below, so the whole project can be shared under one set of terms.
 

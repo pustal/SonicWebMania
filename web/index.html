@@ -60,7 +60,7 @@
       <h2>TV status</h2>
       <p id="status-line">Loading...</p>
       <p id="space-line" class="dim"></p>
-      <p id="restart-line" class="warn hidden">Some uploads are waiting. On the TV press BACK and choose "Restart game" to apply them.</p>
+      <p id="restart-line" class="warn hidden">Some uploads are waiting. On the TV press BACK (the Plus menu) and choose "Restart game" to apply them.</p>
       <p>Store packs on: <select id="pack-dest"></select>
         <button id="pack-folder" class="secondary hidden" type="button">Create the folder on this drive</button></p>
       <p id="pack-dest-line" class="dim"></p>
@@ -90,29 +90,30 @@
 
     <section id="retro-section">
       <h2>Retro games (Sonic 1, 2 and CD)</h2>
-      <label><input id="retro-toggle" type="checkbox"> Offer the retro games in the BACK menu</label>
-      <p id="retro-always" class="dim hidden">Without Sonic Mania's data the retro games are always offered.</p>
-      <p class="dim">Played from your own data packs. With the pack from Sonic Origins alone a game has no sound
-        (Origins keeps its music elsewhere); add the pack of the earlier release and its music and sound effects are used.
-        The earlier Sonic 1 and 2 packs and the mobile Sonic CD pack also play on their own. Takes effect after a restart.</p>
+      <p class="dim">Played from your own data packs, and chosen on the TV in the Plus menu (press BACK, then Games).
+        With the pack from Sonic Origins alone a game has no sound (Origins keeps its music elsewhere); add the pack of the
+        earlier release and its music and sound effects are used. The earlier Sonic 1 and 2 packs and the mobile Sonic CD
+        pack also play on their own. New packs show up after "Restart game".</p>
       <p><label><input id="mania-audio" type="checkbox"> Fill missing music and sounds from Sonic Mania</label></p>
       <p class="dim">With Sonic Mania's Data.rsdk installed: sounds the packs lack (all of them with the Origins pack alone,
         and the Drop Dash, Knuckles' and Amy's moves otherwise) and the zones Mania remixed (Green Hill, Chemical Plant,
         Oil Ocean, Stardust Speedway, Metallic Madness, the jingles).</p>
       <p><label><input id="mania-similar" type="checkbox"> Also give other zones a Mania track of similar feel</label></p>
-      <p class="dim">For example Emerald Hill plays Green Hill and Casino Night plays Studiopolis. Takes effect after a restart.</p>
+      <p class="dim">For example Emerald Hill plays Green Hill and Casino Night plays Studiopolis.</p>
       <p><label><input id="mania-remixes" type="checkbox"> Play Sonic Mania's remixes in their zones</label></p>
       <p class="dim">Green Hill, Chemical Plant, Oil Ocean, Stardust Speedway and Metallic Madness play Mania's remix (act 1
-        or act 2, as the act) even when the earlier release's pack has the original. Takes effect after a restart.</p>
+        or act 2, as the act) even when the earlier release's pack has the original.</p>
+      <p class="dim">These three apply the next time a retro game starts. They are the same settings as in the Plus menu.</p>
       <div id="retro-games"></div>
       <progress id="retro-progress" class="hidden" max="100" value="0"></progress>
       <p id="retro-message"></p>
     </section>
 
     <section>
-      <h2>Mania Plus content</h2>
-      <label><input id="plus-toggle" type="checkbox"> Enable Plus content (I own Sonic Mania Plus)</label>
-      <p class="dim">Off by default, as the decompilation's licence requires. Takes effect after a restart.</p>
+      <h2>Plus DLC</h2>
+      <label><input id="plus-toggle" type="checkbox"> Turn on the Plus DLC (I own it)</label>
+      <p class="dim">Sonic Mania Plus (Encore mode, Mighty, Ray...) and Sonic Origins Plus (Amy, and Knuckles in Sonic CD).
+        Off by default, as the decompilation's licence requires. The game on the TV restarts to apply it.</p>
     </section>
   </div>
 
@@ -130,7 +131,7 @@
  *             pending: ''|'tv'|'usb' }} DataPackState
  * @typedef {{ active: boolean, received: number, expected: number }} UploadState
  * @typedef {{ version: string, mode: 'setup'|'game', freeBytes: number, safetyMarginBytes: number, persistent: boolean,
- *             dataPack: DataPackState, plusEnabled: boolean, retroEnabled: boolean, maniaAudio: boolean,
+ *             dataPack: DataPackState, plusEnabled: boolean, maniaAudio: boolean,
  *             maniaSimilarMusic: boolean, maniaRemixes: boolean, restartPending: boolean,
  *             upload: UploadState }} Status
  * @typedef {{ name: string, size: number, mtime: number }} UserFile
@@ -245,11 +246,6 @@ async function refreshStatus() {
     + (status.persistent ? '' : ' (temporary storage: lost on reboot)');
   byId('restart-line').classList.toggle('hidden', !status.restartPending);
   /** @type {HTMLInputElement} */ (byId('plus-toggle')).checked = status.plusEnabled;
-  // Without Sonic Mania the toggle has no effect: show it on and locked.
-  const retroToggle = /** @type {HTMLInputElement} */ (byId('retro-toggle'));
-  retroToggle.checked = status.retroEnabled || !status.dataPack.present;
-  retroToggle.disabled = !status.dataPack.present;
-  byId('retro-always').classList.toggle('hidden', status.dataPack.present);
   /** @type {HTMLInputElement} */ (byId('mania-audio')).checked = status.maniaAudio;
   const similar = /** @type {HTMLInputElement} */ (byId('mania-similar'));
   similar.checked = status.maniaSimilarMusic;
@@ -692,7 +688,7 @@ async function uploadDataPack(file) {
   if (result.ok) {
     message.textContent = result.text === 'installed'
       ? 'Done! The game is starting on the TV.'
-      : 'Done! Restart the game on the TV (BACK > Restart game) to use it.';
+      : 'Done! On the TV press BACK and choose Restart game to use it.';
     message.className = 'ok';
   } else {
     message.textContent = result.text;
@@ -744,12 +740,6 @@ byId('data-file').addEventListener('change', (event) => {
 byId('plus-toggle').addEventListener('change', async (event) => {
   const checked = /** @type {HTMLInputElement} */ (event.target).checked;
   await api('/api/settings?plusEnabled=' + (checked ? '1' : '0'), { method: 'PUT' });
-  await refreshStatus();
-});
-
-byId('retro-toggle').addEventListener('change', async (event) => {
-  const checked = /** @type {HTMLInputElement} */ (event.target).checked;
-  await api('/api/settings?retroEnabled=' + (checked ? '1' : '0'), { method: 'PUT' });
   await refreshStatus();
 });
 

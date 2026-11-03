@@ -2,9 +2,11 @@
 
 # SonicWebMania
 
-**Version 2.2.1** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
-and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations,
-built as a **native** webOS app (SDL2), with a few TV-friendly extras:
+**Version 3.0.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations, through their Plus
+forks ([RSDKv5-Decompilation-Plus](https://github.com/pustal/RSDKv5-Decompilation-Plus) and
+[Sonic-Mania-Decompilation-Plus](https://github.com/pustal/Sonic-Mania-Decompilation-Plus)), built as a
+**native** webOS app (SDL2), with a few TV-friendly extras:
 
 - **Bring your own data, from your phone.** On first launch the TV shows an address and
   a PIN. Open it on any phone or computer on the same network and upload the `Data.rsdk`
@@ -13,35 +15,38 @@ built as a **native** webOS app (SDL2), with a few TV-friendly extras:
 - **Save transfer.** The same page lists your saves (Sonic Mania's and each retro
   game's) for download, and lets you upload saves from another device.
 - **Plays with the remote.** Controllers work as usual; the remote is mapped too (below).
-- **Back opens a small menu** at any time: Resume, Achievements, Button test, Retro games
-  (when enabled), Restart game, Close app. It also shows the transfer address and this
-  project's page.
-- **Retro games (optional).** The engine also plays Sonic the Hedgehog, Sonic 2 and Sonic CD
-  from your own data packs: those of Sonic Origins and/or of the earlier releases, with
-  save slots, and Sonic Mania's music and sounds filling what the packs lack. See
-  [Retro games](#retro-games).
-- **Achievements.** The game's 18 achievements unlock as you play (the decompilation's
-  engine records them in `Achievements.bin`, next to your saves). The menu lists them all,
-  unlocked and locked, with how to get each one.
+- **Back opens the Plus menu** at any time: Resume, Games, Achievements, Settings, Restart
+  game, Exit. It also shows the transfer page's address and PIN.
+- **Retro games.** The engine also plays Sonic the Hedgehog, Sonic 2 and Sonic CD from
+  your own data packs: those of Sonic Origins and/or of the earlier releases, with save
+  slots, and Sonic Mania's music and sounds filling what the packs lack. The Plus menu's
+  Games page switches between them and Sonic Mania. See [Retro games](#retro-games).
+- **Achievements.** The game's 18 achievements unlock as you play (the engine records them
+  in `Achievements.bin`, next to your saves). The menu lists them all, unlocked and locked,
+  with how to get each one; each retro game has its own twelve.
 - **Light on storage.** Uploads are streamed straight to disk, free space is checked
   before anything is written, and the engine's log is off.
 
 No game assets are included or downloaded by this project.
 
-For other platforms, check [Sonic Mania Decompilation Plus](https://github.com/pustal/Sonic-Mania-Decompilation-Plus).
+The games, their menu and the retro games come from the Plus forks, which also build for
+Windows, macOS, Linux, Android and the Switch: for those platforms, see
+[Sonic Mania Decompilation Plus](https://github.com/pustal/Sonic-Mania-Decompilation-Plus).
+This project is the TV app around them: the setup screen, the transfer page, USB drives
+and the remote.
 
 ## Screenshots
 
-These show the port's own screens; none of them contain game graphics. The scene behind
-the menu is a stand-in drawn for the screenshot, where the paused game would be.
+These show the app's own screens and the Plus menu; none of them contain game graphics
+(the menu was opened before the game had drawn anything behind it).
 
-| First launch on the TV | Back menu during play |
+| First launch on the TV | Plus menu (Back) |
 |---|---|
-| <img src="docs/images/setup-screen.png" alt="Setup screen with address, PIN, free space and upload progress" width="420"> | <img src="docs/images/menu.png" alt="Pause menu with Resume, Achievements, Button test, Restart game and Close app" width="420"> |
+| <img src="docs/images/setup-screen.png" alt="Setup screen with address, PIN, free space and upload progress" width="420"> | <img src="docs/images/menu.png" alt="Plus menu with Resume, Games, Achievements, Settings, Restart game and Exit, and the transfer page's address and PIN" width="420"> |
 
-| Achievements | Button test |
+| Games | Achievements |
 |---|---|
-| <img src="docs/images/achievements.png" alt="Achievement list with unlocked ones highlighted and the selected one's description" width="420"> | <img src="docs/images/button-test.png" alt="Button test showing each press and the game button it becomes" width="420"> |
+| <img src="docs/images/games.png" alt="Games page listing Sonic Mania, Sonic 1, Sonic 2 and Sonic CD" width="420"> | <img src="docs/images/achievements.png" alt="Achievement list with the selected one's description" width="420"> |
 
 | Transfer page: PIN | Transfer page: data, saves and settings |
 |---|---|
@@ -61,16 +66,12 @@ controller's buttons of the same colour:
 | Yellow | Y |
 | 0 | Start / Pause |
 | Arrow keys, OK | D-pad, Start (unchanged) |
-| Back (or Exit) | Port menu |
+| Back (or Exit) | Plus menu |
 
-In the port menu, use 6/4 or the arrows to move, OK/0/Green to choose, Back/Red to resume.
-On a controller, the Guide or View/Back button opens the menu; A chooses, B resumes.
-The mapping lives in `src/port/RemoteInput.cpp` (`kMappings`).
-
-**Button test** (in the Back menu) shows each press as the TV reports it and the game
-button it becomes, for example `Red (code 486) -> B`. If a button does nothing in the game,
-check it there: a press that doesn't appear at all never reached the app. Quick taps on the
-remote are held for at least a frame, so the game never misses a short press.
+In the Plus menu, use 6/4 or the arrows to move, OK/0/Green to choose, Back/Red to go back
+a page (or resume). On a controller, View/Back (Select) opens and closes it; A chooses,
+B goes back. The mapping lives in `src/port/RemoteInput.cpp` (`kMappings`). Quick taps on
+the remote are held for at least a frame, so the game never misses a short press.
 
 ## Transfer page
 
@@ -79,31 +80,35 @@ remote are held for at least a frame, so the game never misses a short press.
 - Every API call needs the 4-digit PIN shown on the TV; a new PIN is generated each launch.
 - Only devices on private networks (192.168.x.x, 10.x.x.x, 172.16-31.x.x) are answered.
 - While the game is running, uploaded files are **staged** and applied the next time the
-  game starts (Back > Restart game). The engine never sees a file change under it.
+  app starts (Back > Restart game). The engine never sees a file change under it. New retro
+  packs show up in the Games page after a restart too.
 - Packs (Sonic Mania's `Data.rsdk` and the retro packs) can be kept on the TV or a USB
   drive, chosen in **Store packs on**, and moved between them later with each pack's
   **Move** button. Sonic Mania's goes in a `SonicWebMania` folder at the top of the drive.
   Only one copy is kept; if both exist, the TV's is used.
-- The engine reopens the packs the running game reads for every file, so those are never
-  changed under it: replacing or moving one copies it now and switches at the next start
-  (the page says so), and removing one waits until you switch games. Sonic Mania's pack is
-  in use during the retro games too when it lends them its audio.
+- The engine reopens a pack for every file it reads, and the Plus menu can switch to any
+  game, so every pack found at launch counts as in use: replacing or moving one copies it
+  now and switches at the next start (the page says so), and removing one waits until then.
 - **Clean up** removes what interrupted uploads, moves and Sonic CD conversions leave
   behind (`.part` and `.conv` files, on the TV and the drives). The app keeps no cache;
   files waiting for the next start are left alone.
-- The Mania Plus content is **off by default** and can be enabled there (see Licence).
+- **Settings**: the Plus DLC and the retro games' audio settings, the same as in the Plus
+  menu's Settings page. A change applies right away (the Plus DLC restarts the game; the
+  audio settings apply the next time a retro game starts).
+- The **Plus DLC** (Sonic Mania Plus, and Sonic Origins Plus in the retro games) is **off by
+  default**, as the decompilation's licence requires, and can be turned on there or in the
+  Plus menu if you own it (see Licence).
 
 ## Retro games
 
 RSDKv5U, the engine revision this port builds, includes the RSDKv3 and RSDKv4 engines
-behind Sonic CD and Sonic 1 and 2. Turn on **Retro games** on the transfer page and upload
-each game's packs there. The **Retro games** page of the Back menu then switches between
-Sonic Mania and every game that can be played (the app restarts into it). The app
-starts with the last game you left normally.
+behind Sonic CD and Sonic 1 and 2, and the Plus fork's Plus module plays them next to Sonic
+Mania. Upload each game's packs on the transfer page, choose **Restart game** in the Plus
+menu, and its **Games** page lists every game that can be played: choosing one switches to
+it in place. The app starts with the last game played.
 
-Sonic Mania is optional. Without its `Data.rsdk` the retro games are always offered (the
-toggle only matters next to Mania), and the first-run screen is done as soon as a retro
-game can be played.
+Sonic Mania is optional: without its `Data.rsdk` the app starts the first retro game, and
+the first-run screen is done as soon as a retro game can be played.
 
 | Pack | Where it comes from |
 |---|---|
@@ -136,12 +141,13 @@ How each game plays depends on what you upload:
     Lava Reef. The title, special stage and credits use Mania's own.
 
   A Mania track that only shares a name with a retro one (its title screen, credits) is
-  not played unless similar music is on. The table is in `src/RetroAudio.cpp`.
+  not played unless similar music is on. The table is in the engine fork's
+  `RSDKv5/RSDK/Plus/PlusAudio.cpp`.
 - **Save slots.** Starting Sonic 1 or 2 opens a save screen: play without saving, or
   pick one of four slots to continue (zone, character, lives and emeralds are shown),
   start a new game, or delete it (press OK twice). New games then choose the character:
-  Sonic, Tails, Knuckles, Sonic & Tails, and with the Origins packs Knuckles & Tails,
-  Amy and Amy & Tails. The games save their own progress as you play (at the end of
+  Sonic, Tails, Knuckles, Sonic & Tails, with the Origins packs Knuckles & Tails, and with
+  the Plus DLC on, Amy and Amy & Tails. The games save their own progress as you play (at the end of
   each act), as the 2013 releases did. The 2013 packs' title screen cannot start a game
   by itself (those releases used native menus), so for them the save screen opens when
   the title would start its demo. Sonic CD goes to its own 2011 menu instead: its save
@@ -157,12 +163,12 @@ How each game plays depends on what you upload:
     the port starts you at the act's last checkpoint, next to the boss. Moving on to the
     next boss is untested.
 
-  Coins are kept in `RetroCoins.ini` in the app's data folder, shared by the three games as
-  in Origins. Missions, the Museum and Story mode are part of Origins' own program, not of
+  Coins are kept in `Plus.ini` in the app's data folder, shared by the three games as in
+  Origins. Missions, the Museum and Story mode are part of Origins' own program, not of
   its packs, so they are not available.
 - **Achievements.** Each game has its own twelve achievements (those of the 2013 and
   2011 releases, which the Origins packs share), unlocked as you play: a notice shows
-  each one, the Back menu's Achievements page lists them, and they are kept in the game's
+  each one, the Plus menu's Achievements page lists them, and they are kept in the game's
   `Achievements.bin`. Sonic CD's own menu entry opens the same list (its Leaderboards
   entry needs an online service, so it only says so).
 - **Saves on the transfer page.** Saves and settings are listed per game (Sonic Mania,
@@ -176,25 +182,18 @@ How each game plays depends on what you upload:
 - **Sonic CD's 2011 packs** (mobile and Steam) use an older format. The TV converts them on
   upload, which needs room for a second copy (about 75 MiB) for a moment. `tools/rsdk_v3_convert.py` does the
   same on a computer.
-- Each game keeps its own settings and saves (`SGame.bin`) in `games/<game>/` in the
-  app's data folder.
+- Each game keeps its saves (`SGame.bin`, `Achievements.bin`) in `retro/<game>/` in the
+  app's data folder; the settings are shared, in `Settings.ini` and `Plus.ini`.
 - Sonic 3 & Knuckles from Origins cannot be played: its game code lives in the Origins
   program, not in its pack.
-- The engine changes this needed are in `patches/rsdk/0002-retro-games.patch`:
-  - a second pack that fills in missing files (`Game:extraDataFile`);
-  - absolute paths for packs on USB drives;
-  - the 2013 packs' (RSDKvB) encryption keys;
-  - Ogg sound effects, which the 2013 packs use and the engine could only read as `.wav`.
-  `patches/rsdk/0003-retro-save-screen-hook.patch` calls the port when a legacy stage
-  loads (the save screen) and once it has loaded (Boss Rush checkpoints);
-  `0004-retro-mirror-mode.patch` mirrors the stage before the HUD is drawn and swaps left
-  and right in Mirror mode; `0005-retro-achievements.patch` passes the games' achievement
-  unlocks and Sonic CD's achievement menu to the port.
-  `0006-retro-v3-input.patch` fixes how the RSDKv3 engine reads buttons in scripts that
-  name no controller (the 2011 Sonic CD's): the engine looked up the controller by the
-  object's slot, so most menu objects never saw a press. `0007-retro-mania-audio.patch`
-  loads Sonic Mania's pack for audio only (`Game:audioDataFile`) and asks the port for
-  stand-ins for missing music and sound effects.
+- All of this is the engine fork's Plus module (`RSDKv5/RSDK/Plus/` in
+  RSDKv5-Decompilation-Plus). The app only tells it what the TV knows, through its platform
+  API (`RSDK::Plus::AddPackFolder()` and friends): the packs on USB drives, the transfer
+  page's address, settings changed on the page, and the **Restart game** entry.
+- **Updating from 2.x.** The first start of 3.0 moves the earlier version's settings
+  (`port.ini`), coins (`RetroCoins.ini`) and retro saves (`games/<game>/`) to where the
+  engine keeps them. The retro games no longer need turning on: they are offered whenever
+  their packs are there.
 
 ## Disk space
 
@@ -203,8 +202,8 @@ prints these figures every time):
 
 | What | Size |
 |---|---|
-| IPK download | ~2.1 MiB |
-| Installed app (binary + bundled SDL2) | ~4.5 MiB |
+| IPK download | ~2.3 MiB |
+| Installed app (binary + bundled SDL2) | ~5 MiB |
 | Your `Data.rsdk` | the size of your file |
 | Retro game packs (optional, on the TV or a USB drive) | Origins 17-35 MiB each; earlier releases 43-75 MiB each |
 | Saves and settings | well under 1 MiB (time-attack replays add a little) |
@@ -247,9 +246,10 @@ The webOS toolchain is Linux x86_64 only. On a Mac, build inside a Linux VM or a
 container (for example `docker run -it -v "$PWD":/src ubuntu:24.04`).
 
 ```sh
-git clone --recursive https://github.com/pustal/SonicWebMania.git
+git clone https://github.com/pustal/SonicWebMania.git
 cd SonicWebMania
-scripts/apply-patches.sh           # once after cloning or updating the engine
+git submodule update --init        # not --recursive: the game's own copy of the engine isn't needed
+git -C external/RSDKv5-Decompilation-Plus submodule update --init
 
 # Toolchain: https://github.com/openlgtv/buildroot-nc4/releases
 #   arm-webos-linux-gnueabi_sdk-buildroot.tar.gz, then run its relocate-sdk.sh
@@ -271,52 +271,43 @@ cmake -B build -G Ninja && cmake --build build
 ./build/rsdk/SonicWebMania          # data in ~/.local/share/SonicWebMania (or $SWM_DATA_DIR)
 ```
 
-Escape opens the port menu on a keyboard.
+Escape (or Tab) opens the Plus menu on a keyboard.
 
 ## How it is put together
 
 ```
-src/main.cpp                launcher: storage, transfer server, setup screen, picks the game, then the engine
-src/RetroSaves.cpp          retro games' save slots, Origins modes, coins and Mirror mode (engine side)
-src/RetroAudio.cpp          Sonic Mania stand-ins for the retro games' missing music and sounds
+src/main.cpp                launcher: storage, transfer server, setup screen, then the engine, told about
+                            USB packs, the transfer page and page settings (RSDK::Plus platform API)
 src/port/
-  WebOSPortHooks.h          the C interface the engine calls
-  PortRuntime.*             implements the hooks: Back menu (achievements, button test,
-                            retro games), notifications, Plus opt-in
-  RetroGames.*              Sonic 1, 2 and CD: finds their packs, plans Origins + classic, per-game folders
-  IniEdit.*                 rewrites the pack paths in Settings.ini before each start
-  SaveSelect.h              what the retro games' save screen shows and returns
-  RetroAchievements.*       the retro games' achievement lists
+  PortRuntime.*             the remote's buttons, rewritten for the engine (an SDL event filter)
+  RemoteInput.*             remote button mapping, Back for the Plus menu, menu navigation (setup screen)
+  SettingsChannel.*         hands the page's settings changes to the engine's thread
+  PlusFiles.*               reads the engine's Plus.ini / Settings.ini; moves a 2.x install's settings and saves
+  RetroGames.*              Sonic 1, 2 and CD: finds their packs (TV and USB) for the page and the setup screen
+  IniEdit.*                 rewrites Sonic Mania's pack path in Settings.ini before each start
   RsdkPack.*                looks inside packs; converts Sonic CD's 2011 pack
   Md5.*                     MD5 for pack file names
   UsbDrives.*               mounted USB drives (from /proc/mounts)
-  Achievements.h            achievement entries the menu shows (read from the engine in main.cpp)
-  RemoteInput.*             remote button mapping and menu navigation
   SetupScreen.*             first-run screen (address, PIN, free space, progress)
-  TransferServer.*          HTTP server (cpp-httplib) for data and saves
+  TransferServer.*          HTTP server (cpp-httplib) for data, saves and settings
   Storage.*                 data folder, Sonic Mania's pack (TV or USB), free space, staged uploads, log trimming
-  PortConfig.*              port.ini (Plus and retro opt-ins, Mania audio settings, last game)
   PortInfo.h                app version (from CMake) and project address
   BitmapFont.* TextRenderer.cpp   built-in 8x8 font, so text works before any game data exists
 web/index.html              the transfer page, embedded into the binary at build time
-patches/rsdk/               engine patches, applied by scripts/apply-patches.sh: 0001 hook call sites in the
-                            SDL2 device + the Plus gate; 0002 retro games; 0003 save screen hook;
-                            0004 Mirror mode; 0005 retro achievements; 0006 RSDKv3 script input;
-                            0007 Sonic Mania audio for retro games (see Retro games)
 tools/                      rsdk_table.py (compare pack contents), rsdk_v3_convert.py (Sonic CD 2011 pack)
 cmake/WriteManifest.cmake       Homebrew Channel manifest for each release
 scripts/make-icon.py        draws the app icon and README logo (original pixel art with the name)
 cmake/RSDKPlatform-webOS.cmake   RSDK platform file (SDL2 backend, our main, static libstdc++)
 cmake/SDL2WebOSBackport.cmake    bundles webosbrew's SDL-webOS 2.30 (remote keys, Back/Exit delivery)
-external/                   submodules: engine, game, cpp-httplib, libogg, libtheora
+external/                   submodules: the engine and the game (the Plus forks), cpp-httplib, libogg, libtheora
 ```
 
 ## Licence
 
 See `LICENSE.md`. In short: this is a non-commercial project built on the RSDKv5 and
-Sonic Mania decompilations by Rubberduckycooly and chuliRMG. The port's own code has its
+Sonic Mania decompilations by Rubberduckycooly and chuliRMG (through their Plus forks). The port's own code has its
 own licence, the SonicWebMania licence, on the same terms as theirs, and their licences
-apply to the whole repository. Builds must keep the Plus content off by default, may not be sold
+apply to the whole repository. Builds must keep the Plus DLC off by default, may not be sold
 or used for profit, and may not include game assets.
 
 Sonic Mania, Sonic the Hedgehog, Sonic CD and Sonic Origins are trademarks of SEGA. This project is not affiliated with SEGA.
