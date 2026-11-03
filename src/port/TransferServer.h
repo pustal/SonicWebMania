@@ -15,7 +15,9 @@
 #define SWM_TRANSFER_SERVER_H
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -31,6 +33,7 @@ namespace swm
 {
 
 class Storage;
+class ModLibrary;
 class RetroLibrary;
 class SettingsChannel;
 
@@ -62,7 +65,7 @@ public:
      * @param settings Where the page's settings changes go, for the engine to
      *                 apply on its thread (see SettingsChannel.h).
      */
-    TransferServer(Storage &storage, SettingsChannel &settings, const RetroLibrary &retro, std::string pin);
+    TransferServer(Storage &storage, SettingsChannel &settings, const RetroLibrary &retro, const ModLibrary &mods, std::string pin);
     ~TransferServer();
 
     TransferServer(const TransferServer &)            = delete;
@@ -92,6 +95,13 @@ public:
      */
     void SetPacksInUse(const std::vector<std::string> &paths);
 
+    /**
+     * The mods that were on when the engine started (folder names): the
+     * session reads their files, so replacing, moving or removing one waits
+     * for the next start (see ModLibrary.h).
+     */
+    void SetModsInUse(const std::vector<std::string> &folders);
+
     /** The bound port, or 0 when not running. */
     std::uint16_t Port() const { return port_.load(); }
 
@@ -107,6 +117,18 @@ private:
     /** The /api/retro routes (see TransferServer.cpp). */
     void RegisterRetroRoutes();
 
+    /** The /api/mods routes (see TransferServer.cpp). */
+    void RegisterModRoutes();
+
+    /** True when mod @p folder is one of those set by SetModsInUse(). */
+    bool IsModInUse(const std::string &folder) const;
+
+    /** `<folder>.part` folders of mod uploads still going (written to in the last few minutes), which Clean up leaves alone. */
+    std::vector<std::string> ActiveModUploads() const;
+
+    /** Notes that the mod upload writing @p partFolder is still going. */
+    void TouchModUpload(const std::string &partFolder);
+
     /** Marks that something changed which applies at the next launch (only while a game runs). */
     void NoteRestartNeeded();
 
@@ -119,6 +141,7 @@ private:
     Storage &storage_;
     SettingsChannel &settings_;
     const RetroLibrary &retro_;
+    const ModLibrary &mods_;
     const std::string pin_;
 
     std::unique_ptr<httplib::Server> server_;
@@ -132,6 +155,12 @@ private:
 
     mutable std::mutex packsMutex_;
     std::vector<std::string> packsInUse_; ///< Canonical paths (see SetPacksInUse()).
+    std::vector<std::string> modsInUse_;  ///< Folder names (see SetModsInUse()), also under packsMutex_.
+
+    /** Serialises changes to the mod folders and modconfig.ini. */
+    std::mutex modsMutex_;
+    mutable std::mutex modUploadsMutex_;
+    std::map<std::string, std::chrono::steady_clock::time_point> modUploads_; ///< See ActiveModUploads().
 };
 
 /** Generates a random 4-digit PIN for this session. */

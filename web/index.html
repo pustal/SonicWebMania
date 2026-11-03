@@ -39,6 +39,8 @@
   .pack .info { flex:1 1 240px; }
   .pack button, .pack label.button { padding:5px 10px; font-size:.88rem; }
   button.secondary { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  .mod { border-top:1px solid var(--line); padding-top:8px; }
+  .mod label { margin-right:6px; }
   footer { text-align:center; padding:8px 0 24px; }
 </style>
 </head>
@@ -61,7 +63,7 @@
       <p id="status-line">Loading...</p>
       <p id="space-line" class="dim"></p>
       <p id="restart-line" class="warn hidden">Some uploads are waiting. On the TV press BACK (the Plus menu) and choose "Restart game" to apply them.</p>
-      <p>Store packs on: <select id="pack-dest"></select>
+      <p>Store packs and mods on: <select id="pack-dest"></select>
         <button id="pack-folder" class="secondary hidden" type="button">Create the folder on this drive</button></p>
       <p id="pack-dest-line" class="dim"></p>
       <p><span id="cleanup-line" class="dim">Checking for leftovers...</span>
@@ -109,6 +111,23 @@
       <p id="retro-message"></p>
     </section>
 
+    <section id="mods-section">
+      <h2>Mods</h2>
+      <p class="dim">Mods for the engine's mod loader: a folder with a <code>mod.ini</code> and the game files it changes.
+        Choose a mod's folder, or a folder holding several mods; unzip a downloaded mod first. Mods go where
+        "Store packs and mods on" says, and are on once uploaded. Sonic 1, 2 and CD mods work too, in their game.</p>
+      <label class="button" for="mod-folder">Upload a mod folder</label>
+      <input id="mod-folder" type="file" webkitdirectory multiple>
+      <button id="mod-stop" class="secondary hidden" type="button">Stop</button>
+      <progress id="mod-progress" class="hidden" max="100" value="0"></progress>
+      <p id="mod-message"></p>
+      <div id="mod-list"></div>
+      <p class="dim">When two mods change the same file, the one higher in the list wins. Changes apply the next time a
+        game starts (choose Restart game in the Plus menu, or switch games there). A mod that was on when the game
+        started is in use until then, so replacing, moving or removing it finishes at the next start. Code mods (with
+        a LogicFile) are built for computers and do not load on the TV.</p>
+    </section>
+
     <section>
       <h2>Plus DLC</h2>
       <label><input id="plus-toggle" type="checkbox"> Turn on the Plus DLC (I own it)</label>
@@ -143,8 +162,13 @@
  *             origins: RetroPack, classic: RetroPack }} RetroGame
  * @typedef {{ mount: string, name: string, fileSystem: string, freeBytes: number, totalBytes: number,
  *             writable: boolean, hasFolder: boolean, folder: string }} UsbDrive
- * @typedef {{ enabled: boolean, tv: { folder: string, freeBytes: number, safetyMarginBytes: number },
+ * @typedef {{ tv: { folder: string, freeBytes: number, safetyMarginBytes: number },
  *             drives: UsbDrive[], games: RetroGame[] }} RetroState
+ * @typedef {{ folder: string, name: string, author: string, version: string, description: string, game: string,
+ *             targetVersion: number, hasLogic: boolean, bytes: number, files: number, location: 'tv'|'usb',
+ *             mount: string, active: boolean, order: number, inUse: boolean, pending: boolean, removing: boolean,
+ *             shadowed: boolean }} Mod
+ * @typedef {{ folder: string, files: { file: File, path: string }[], bytes: number }} ModUpload
  */
 
 /** Session-only so the PIN is forgotten when the tab closes. */
@@ -170,6 +194,16 @@ let lastStatus = null;
 let lastRetro = null;
 /** True while a pack upload or move runs (one at a time). */
 let packBusy = false;
+/** @type {Mod[]} */
+let lastMods = [];
+/** Set by the Stop button of a mod upload. */
+let modStopRequested = false;
+/** The mod whose Remove button was pressed once (a second press removes it). */
+let modRemoveArmed = '';
+/** Must match kMaxModFileBytes in TransferServer.cpp. */
+const MAX_MOD_FILE_BYTES = 256 * 1024 * 1024;
+/** Mod files sent at the same time (the TV serves two requests at once). */
+const PARALLEL_MOD_UPLOADS = 2;
 /** The retro games' ids, from the last file listing (for the download-name prefix). */
 let retroGameIds = /** @type {string[]} */ ([]);
 
@@ -397,7 +431,8 @@ function renderPackDestinations() {
   byId('pack-folder').classList.toggle('hidden', !drive || drive.hasFolder);
   renderManiaPack();
   byId('pack-dest-line').textContent = drive
-    ? 'On the drive, Sonic Mania\'s Data.rsdk goes in the SonicWebMania folder and the retro packs in SonicWebMania/retro'
+    ? 'On the drive, Sonic Mania\'s Data.rsdk goes in the SonicWebMania folder, the retro packs in SonicWebMania/retro'
+      + ' and mods in SonicWebMania/mods'
       + (drive.hasFolder ? '.' : ' (created with the first upload).')
     : 'Packs go in the app\'s storage on the TV. A USB drive saves the TV\'s space.';
 }
@@ -720,12 +755,306 @@ async function uploadSaves(files, game) {
   await Promise.all([refreshStatus(), refreshFiles()]);
 }
 
+// ---------------------------------------------------------------- mods
+
+async function refreshMods() {
+  const response = await api('/api/mods');
+  lastMods = (await response.json()).mods;
+  renderMods();
+}
+
+/** @param {Mod} mod @returns {string} where it is, for people */
+function modPlace(mod) {
+  if (mod.location === 'tv') return 'the TV';
+  const drive = lastRetro && lastRetro.drives.find((d) => d.mount === mod.mount);
+  return 'USB ' + (drive ? drive.name : mod.mount);
+}
+
+function renderMods() {
+  const list = byId('mod-list');
+  list.replaceChildren();
+  if (lastMods.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'dim';
+    empty.textContent = 'No mods yet.';
+    list.append(empty);
+    return;
+  }
+  const ordered = lastMods.filter((m) => !m.shadowed);
+  for (const mod of lastMods) {
+    const row = document.createElement('div');
+    row.className = 'pack mod';
+
+    const info = document.createElement('div');
+    info.className = 'info';
+    const title = document.createElement('div');
+    const name = document.createElement('strong');
+    name.textContent = mod.name;
+    title.append(name, (mod.version ? ' ' + mod.version : '') + (mod.author ? ' by ' + mod.author : ''));
+    const details = document.createElement('div');
+    details.className = 'dim';
+    details.textContent = 'For ' + mod.game + '. Folder ' + mod.folder + ', ' + humanBytes(mod.bytes) + ' in ' + mod.files
+      + ' file' + (mod.files === 1 ? '' : 's') + ', on ' + modPlace(mod) + '.';
+    info.append(title, details);
+    if (mod.description) {
+      const description = document.createElement('div');
+      description.className = 'dim';
+      description.textContent = mod.description;
+      info.append(description);
+    }
+    const notes = [];
+    if (mod.inUse) notes.push('In use since the game started');
+    if (mod.pending) notes.push('a new copy replaces it at the next start');
+    if (mod.removing) notes.push('removed at the next start');
+    if (mod.shadowed) notes.push('not used: the copy on the TV of the same folder is');
+    if (mod.hasLogic) notes.push('has code (a LogicFile), which only loads if it was built for the TV');
+    if (notes.length) {
+      const note = document.createElement('div');
+      note.className = mod.hasLogic || mod.shadowed ? 'warn' : 'dim';
+      note.textContent = notes.join('; ') + '.';
+      info.append(note);
+    }
+
+    const actions = document.createElement('div');
+    if (!mod.shadowed && !mod.removing) {
+      const toggle = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = mod.active;
+      box.addEventListener('change', () => setModActive(mod, box.checked).catch(() => undefined));
+      toggle.append(box, ' On ');
+      actions.append(toggle);
+      const index = ordered.indexOf(mod);
+      for (const [label, delta] of /** @type {[string, number][]} */ ([['Up', -1], ['Down', 1]])) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'secondary';
+        button.textContent = label;
+        button.disabled = delta < 0 ? index === 0 : index === ordered.length - 1;
+        button.addEventListener('click', () => moveModInOrder(mod, delta).catch(() => undefined));
+        actions.append(button, ' ');
+      }
+      const target = mod.pending ? null : moveTarget(mod.location);
+      if (target) {
+        const move = document.createElement('button');
+        move.type = 'button';
+        move.className = 'secondary';
+        move.textContent = 'Move to ' + targetName(target);
+        move.addEventListener('click', () => moveMod(mod, target).catch(() => undefined));
+        actions.append(move, ' ');
+      }
+    }
+    if (!mod.removing) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'secondary';
+      remove.textContent = modRemoveArmed === mod.folder ? 'Remove: press again' : 'Remove';
+      remove.addEventListener('click', () => removeMod(mod).catch(() => undefined));
+      actions.append(remove);
+    }
+    row.append(info, actions);
+    list.append(row);
+  }
+}
+
+/** @param {string} text @param {''|'ok'|'warn'} [kind] */
+function modSay(text, kind = '') {
+  const message = byId('mod-message');
+  message.textContent = text;
+  message.className = kind;
+}
+
+/** @param {Mod} mod @param {boolean} on */
+async function setModActive(mod, on) {
+  const response = await api('/api/mods/' + encodeURIComponent(mod.folder) + '/active?on=' + (on ? '1' : '0'), { method: 'PUT' });
+  if (!response.ok) modSay(await response.text(), 'warn');
+  else modSay(mod.name + (on ? ' is on' : ' is off') + ' from the next time a game starts.', 'ok');
+  await refreshMods();
+}
+
+/** @param {Mod} mod @param {number} delta */
+async function moveModInOrder(mod, delta) {
+  const response = await api('/api/mods/' + encodeURIComponent(mod.folder) + '/order?delta=' + delta, { method: 'POST' });
+  if (!response.ok) modSay(await response.text(), 'warn');
+  await refreshMods();
+}
+
+/** @param {Mod} mod @param {string} target */
+async function moveMod(mod, target) {
+  if (packBusy) { modSay('Wait for the current upload or move to finish.', 'warn'); return; }
+  packBusy = true;
+  const progress = /** @type {HTMLProgressElement} */ (byId('mod-progress'));
+  progress.classList.remove('hidden');
+  progress.value = 0;
+  modSay('Moving ' + mod.name + ' to ' + targetName(target) + '... keep this page open.');
+  const poll = setInterval(async () => {
+    try {
+      const status = /** @type {Status} */ (await (await api('/api/status')).json());
+      if (status.upload.expected > 0) progress.value = Math.floor((status.upload.received / status.upload.expected) * 100);
+    } catch (error) { /* The next poll will tell. */ }
+  }, 1000);
+  const response = await api('/api/mods/' + encodeURIComponent(mod.folder) + '/move?' + destinationQuery(target), { method: 'POST' });
+  clearInterval(poll);
+  packBusy = false;
+  progress.classList.add('hidden');
+  const text = await response.text();
+  modSay(!response.ok ? text
+    : text === 'staged' ? mod.name + ' copied to ' + targetName(target) + '. It is in use, so the move finishes at the next start.'
+    : mod.name + ' moved to ' + targetName(target) + '.', response.ok ? 'ok' : 'warn');
+  await Promise.all([refreshMods(), refreshRetro(), refreshCleanup()]);
+}
+
+/** @param {Mod} mod */
+async function removeMod(mod) {
+  if (modRemoveArmed !== mod.folder) {
+    modRemoveArmed = mod.folder; // Ask for a second press.
+    renderMods();
+    return;
+  }
+  modRemoveArmed = '';
+  const response = await api('/api/mods/' + encodeURIComponent(mod.folder), { method: 'DELETE' });
+  const text = await response.text();
+  modSay(!response.ok ? text
+    : text === 'staged' ? mod.name + ' is off, and removed at the next start (it is in use).'
+    : mod.name + ' removed.', response.ok ? 'ok' : 'warn');
+  await Promise.all([refreshMods(), refreshRetro()]);
+}
+
+/**
+ * Groups the chosen files into mods: each folder with a mod.ini is one, named
+ * after the folder (the chosen folder itself, or folders inside it).
+ * @param {File[]} files @returns {{ mods: ModUpload[], skipped: number, tooBig: string[] }}
+ */
+function planModUpload(files) {
+  /** @param {File} file @returns {string} */
+  const pathOf = (file) => file.webkitRelativePath || file.name;
+  // Folders holding a mod.ini, outermost first, so a mod.ini inside a mod stays part of it.
+  const roots = files.map(pathOf).filter((path) => path.split('/').pop().toLowerCase() === 'mod.ini')
+    .map((path) => path.slice(0, path.length - 'mod.ini'.length)).filter((root) => root !== '')
+    .sort((a, b) => a.length - b.length);
+  const outer = roots.filter((root, i) => !roots.slice(0, i).some((other) => root.startsWith(other)));
+  /** @type {Map<string, ModUpload>} */
+  const mods = new Map();
+  let skipped = 0;
+  const tooBig = [];
+  for (const file of files) {
+    const path = pathOf(file);
+    const root = outer.find((r) => path.startsWith(r));
+    const relative = root ? path.slice(root.length) : '';
+    const parts = relative.split('/');
+    if (!root || parts.some((part) => part.startsWith('.')) || /^(thumbs\.db|desktop\.ini)$/i.test(parts[parts.length - 1])) {
+      skipped++;
+      continue;
+    }
+    if (file.size > MAX_MOD_FILE_BYTES) { tooBig.push(relative); continue; }
+    const folder = root.slice(0, -1).split('/').pop() || '';
+    if (!mods.has(root)) mods.set(root, { folder, files: [], bytes: 0 });
+    const upload = /** @type {ModUpload} */ (mods.get(root));
+    // The engine opens "mod.ini" exactly; FAT drives don't mind the case, the TV does.
+    upload.files.push({ file, path: relative.toLowerCase() === 'mod.ini' ? 'mod.ini' : relative });
+    upload.bytes += file.size;
+  }
+  return { mods: Array.from(mods.values()), skipped, tooBig };
+}
+
+/**
+ * PUTs @p body with upload progress.
+ * @param {string} url @param {Blob} body @param {(fraction: number) => void} onProgress
+ * @returns {Promise<{ ok: boolean, text: string }>}
+ */
+function putWithProgress(url, body, onProgress) {
+  return new Promise((resolve) => {
+    const request = new XMLHttpRequest();
+    request.open('PUT', url);
+    request.setRequestHeader('X-Pin', pin());
+    request.upload.onprogress = (event) => { if (event.lengthComputable) onProgress(event.loaded / event.total); };
+    request.onload = () => resolve({ ok: request.status === 200, text: request.responseText });
+    request.onerror = () => resolve({ ok: false, text: 'Connection to the TV was lost.' });
+    request.send(body);
+  });
+}
+
+/** Uploads the mods in the chosen folder, one after the other, a few files at a time. @param {File[]} files */
+async function uploadMods(files) {
+  if (packBusy) { modSay('Wait for the current upload or move to finish.', 'warn'); return; }
+  const plan = planModUpload(files);
+  if (plan.mods.length === 0) {
+    modSay('No mod there: a mod is a folder with a mod.ini in it.', 'warn');
+    return;
+  }
+  const totalBytes = plan.mods.reduce((sum, mod) => sum + mod.bytes, 0);
+  const space = packSpace();
+  if (totalBytes + space.margin > space.free) {
+    modSay('Not enough space there: needs ' + humanBytes(totalBytes + space.margin) + ', ' + humanBytes(space.free) + ' free.', 'warn');
+    return;
+  }
+
+  const dest = destinationQuery(packDestination());
+  const progress = /** @type {HTMLProgressElement} */ (byId('mod-progress'));
+  const stop = byId('mod-stop');
+  packBusy = true;
+  modStopRequested = false;
+  progress.classList.remove('hidden');
+  stop.classList.remove('hidden');
+  let sentBytes = 0;
+  const results = [];
+  for (const mod of plan.mods) {
+    if (modStopRequested) break;
+    const modQuery = 'mod=' + encodeURIComponent(mod.folder) + '&' + dest;
+    const begin = await api('/api/mods/upload/begin?' + modQuery, { method: 'POST' });
+    if (!begin.ok) { results.push(mod.folder + ': ' + await begin.text()); continue; }
+
+    const inFlight = new Array(PARALLEL_MOD_UPLOADS).fill(0);
+    let next = 0, failed = 0, lastError = '';
+    const render = () => {
+      const sent = sentBytes + inFlight.reduce((a, b) => a + b, 0);
+      progress.value = totalBytes ? Math.floor((sent / totalBytes) * 100) : 100;
+      modSay('Uploading ' + mod.folder + ': ' + humanBytes(sent) + ' of ' + humanBytes(totalBytes) + '... keep this page open.');
+    };
+    /** @param {number} worker */
+    const runWorker = async (worker) => {
+      while (!modStopRequested && failed === 0 && next < mod.files.length) {
+        const job = mod.files[next++];
+        const url = '/api/mods/upload/file?' + modQuery + '&path=' + encodeURIComponent(job.path);
+        const onProgress = (/** @type {number} */ fraction) => { inFlight[worker] = fraction * job.file.size; render(); };
+        let result = await putWithProgress(url, job.file, onProgress);
+        if (!result.ok && result.text.startsWith('Connection')) result = await putWithProgress(url, job.file, onProgress);
+        inFlight[worker] = 0;
+        sentBytes += job.file.size;
+        if (!result.ok) { failed++; lastError = job.path + ': ' + result.text; }
+        render();
+      }
+    };
+    await Promise.all(Array.from({ length: PARALLEL_MOD_UPLOADS }, (_, worker) => runWorker(worker)));
+    if (modStopRequested) { results.push(mod.folder + ': stopped'); break; }
+    if (failed) { results.push(mod.folder + ': ' + lastError); continue; }
+
+    const finish = await api('/api/mods/upload/finish?' + modQuery, { method: 'POST' });
+    const text = await finish.text();
+    results.push(!finish.ok ? mod.folder + ': ' + text
+      : text === 'staged' ? mod.folder + ' received (it replaces the one in use at the next start)'
+      : mod.folder + ' installed');
+  }
+
+  packBusy = false;
+  progress.classList.add('hidden');
+  stop.classList.add('hidden');
+  const problems = results.some((line) => line.includes(': '));
+  modSay(results.join('. ') + '.'
+    + (plan.tooBig.length ? ' Skipped files too big for the TV: ' + plan.tooBig.join(', ') + '.' : '')
+    + (plan.skipped ? ' Skipped ' + plan.skipped + ' hidden or stray file(s).' : '')
+    + (problems ? '' : ' Mods load the next time a game starts.'), problems ? 'warn' : 'ok');
+  await Promise.all([refreshMods(), refreshRetro(), refreshCleanup()]);
+}
+
+
 byId('pin-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const input = /** @type {HTMLInputElement} */ (byId('pin-input'));
   sessionStorage.setItem(PIN_KEY, input.value.trim());
   try {
     await Promise.all([refreshStatus(), refreshFiles(), refreshRetro(), refreshCleanup()]);
+    await refreshMods(); // After the drives (refreshRetro), which name where each mod is.
   } catch (error) {
     // showPinForm() already explained a wrong PIN.
   }
@@ -743,7 +1072,10 @@ byId('plus-toggle').addEventListener('change', async (event) => {
   await refreshStatus();
 });
 
-byId('pack-dest').addEventListener('change', () => { renderPackDestinations(); refreshRetro().catch(() => undefined); });
+byId('pack-dest').addEventListener('change', () => {
+  renderPackDestinations();
+  refreshRetro().then(() => renderMods()).catch(() => undefined);
+});
 
 byId('mania-move').addEventListener('click', () => {
   const target = lastStatus ? moveTarget(lastStatus.dataPack.location) : null;
@@ -788,8 +1120,19 @@ byId('pack-folder').addEventListener('click', async () => {
   await refreshRetro();
 });
 
+byId('mod-folder').addEventListener('change', (event) => {
+  const input = /** @type {HTMLInputElement} */ (event.target);
+  // Copy the list first: clearing the input below empties the live FileList.
+  const files = input.files ? Array.from(input.files) : [];
+  if (files.length > 0) uploadMods(files).catch((error) => modSay(String(error), 'warn'));
+  input.value = '';
+});
+
+byId('mod-stop').addEventListener('click', () => { modStopRequested = true; });
+
 if (pin()) {
-  Promise.all([refreshStatus(), refreshFiles(), refreshRetro(), refreshCleanup()]).catch(() => undefined);
+  Promise.all([refreshStatus(), refreshFiles(), refreshRetro(), refreshCleanup()])
+    .then(() => refreshMods()).catch(() => undefined);
 }
 setInterval(() => {
   if (pin() && !byId('app').classList.contains('hidden')) refreshStatus().catch(() => undefined);

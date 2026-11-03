@@ -11,8 +11,8 @@
  *   GET  /api/files           JSON: saves/settings files, Sonic Mania's and each retro game's
  *   GET  /api/files/:name[?game=<id>]   download one file (a retro game's with ?game=sonic1 ...)
  *   PUT  /api/files/:name[?game=<id>]   raw body = replacement file (applied at next launch while playing)
- *   PUT  /api/settings?plusEnabled=0|1&retroEnabled=0|1&maniaAudio=0|1&maniaSimilarMusic=0|1&maniaRemixes=0|1
- *                             (any of them)
+ *   PUT  /api/settings?plusEnabled=0|1&maniaAudio=0|1&maniaSimilarMusic=0|1&maniaRemixes=0|1
+ *                             (any of them; the engine applies them on its next frame)
  *   GET  /api/retro           JSON: retro mode, TV and USB space, each game's packs
  *   PUT  /api/retro/:game/:edition?dest=tv|usb[&mount=<USB mount point>]
  *                             raw body = a retro game's pack (edition: origins|classic)
@@ -21,6 +21,14 @@
  *   POST /api/move?pack=mania|<game>-<edition>&dest=tv|usb[&mount=<USB mount point>]
  *                             moves a pack between the TV and a USB drive (one in use is
  *                             copied now and switched at the next start)
+ *   GET  /api/mods            JSON: every mod (TV and USB), in load order, and whether it is on
+ *   POST /api/mods/upload/begin?mod=<folder>&dest=tv|usb[&mount=...]   starts a mod folder's upload
+ *   PUT  /api/mods/upload/file?mod=<folder>&path=<path in the mod>&dest=...   raw body = one file
+ *   POST /api/mods/upload/finish?mod=<folder>&dest=...   installs it (a mod in use: at the next start)
+ *   PUT  /api/mods/:folder/active?on=0|1    turns a mod on or off
+ *   POST /api/mods/:folder/order?delta=-1|1 moves a mod up (higher priority) or down
+ *   POST /api/mods/:folder/move?dest=tv|usb[&mount=...]   moves a mod between the TV and a drive
+ *   DELETE /api/mods/:folder            removes a mod (one in use: at the next start)
  *   GET  /api/cleanup         JSON: leftovers of interrupted uploads, moves and conversions
  *   POST /api/cleanup         removes them
  *
@@ -29,6 +37,7 @@
  */
 #include "TransferServer.h"
 
+#include "ModLibrary.h"
 #include "NetInfo.h"
 #include "PortInfo.h"
 #include "SettingsChannel.h"
@@ -367,6 +376,30 @@ std::vector<std::string> CleanableFiles(const Storage &storage, const RetroLibra
     return files;
 }
 
+/**
+ * Mod uploads and moves that were interrupted: `<folder>.part` folders in
+ * the TV's and the drives' mod folders, except those of @p active uploads.
+ */
+std::vector<std::string> CleanableModParts(const ModLibrary &mods, const std::vector<std::string> &active)
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> folders;
+    std::error_code ec;
+    const std::string suffix = ModLibrary::kPartSuffix;
+    for (const std::string &location : mods.Folders()) {
+        for (const fs::directory_entry &entry : fs::directory_iterator(location, ec)) {
+            const std::string name = entry.path().filename().string();
+            std::error_code typeError;
+            if (!entry.is_directory(typeError) || name.size() <= suffix.size()
+                || name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
+                continue;
+            if (std::find(active.begin(), active.end(), entry.path().string()) == active.end())
+                folders.push_back(entry.path().string());
+        }
+    }
+    return folders;
+}
+
 /** JSON array of @p files. */
 std::string FileListJson(const std::vector<UserFile> &files)
 {
@@ -393,8 +426,9 @@ std::string GeneratePin()
     return buffer;
 }
 
-TransferServer::TransferServer(Storage &storage, SettingsChannel &settings, const RetroLibrary &retro, std::string pin)
-    : storage_(storage), settings_(settings), retro_(retro), pin_(std::move(pin))
+TransferServer::TransferServer(Storage &storage, SettingsChannel &settings, const RetroLibrary &retro, const ModLibrary &mods,
+                               std::string pin)
+    : storage_(storage), settings_(settings), retro_(retro), mods_(mods), pin_(std::move(pin))
 {
 }
 
@@ -468,6 +502,38 @@ void TransferServer::SetPacksInUse(const std::vector<std::string> &paths)
     }
     std::lock_guard<std::mutex> lock(packsMutex_);
     packsInUse_ = std::move(canonical);
+}
+
+void TransferServer::SetModsInUse(const std::vector<std::string> &folders)
+{
+    std::lock_guard<std::mutex> lock(packsMutex_);
+    modsInUse_ = folders;
+}
+
+bool TransferServer::IsModInUse(const std::string &folder) const
+{
+    std::lock_guard<std::mutex> lock(packsMutex_);
+    return std::find(modsInUse_.begin(), modsInUse_.end(), folder) != modsInUse_.end();
+}
+
+void TransferServer::TouchModUpload(const std::string &partFolder)
+{
+    std::lock_guard<std::mutex> lock(modUploadsMutex_);
+    modUploads_[partFolder] = std::chrono::steady_clock::now();
+}
+
+std::vector<std::string> TransferServer::ActiveModUploads() const
+{
+    // An upload that sent nothing for this long was abandoned (the page closed); Clean up may take its files.
+    constexpr auto kAbandoned = std::chrono::minutes(5);
+    const auto now            = std::chrono::steady_clock::now();
+    std::vector<std::string> active;
+    std::lock_guard<std::mutex> lock(modUploadsMutex_);
+    for (const auto &upload : modUploads_) {
+        if (now - upload.second < kAbandoned)
+            active.push_back(upload.first);
+    }
+    return active;
 }
 
 bool TransferServer::IsPackInUse(const std::string &path) const
@@ -746,6 +812,7 @@ void TransferServer::RegisterRoutes()
     });
 
     RegisterRetroRoutes();
+    RegisterModRoutes();
 }
 
 namespace
@@ -1116,8 +1183,11 @@ void TransferServer::RegisterRetroRoutes()
         const std::vector<std::string> files = CleanableFiles(storage_, retro_);
         for (const std::string &file : files)
             bytes += Storage::FileSize(file);
+        const std::vector<std::string> modParts = CleanableModParts(mods_, ActiveModUploads());
+        for (const std::string &folder : modParts)
+            bytes += ModLibrary::MeasureTree(folder).first;
         std::ostringstream json;
-        json << "{\"files\":" << files.size() << ",\"bytes\":" << bytes
+        json << "{\"files\":" << files.size() + modParts.size() << ",\"bytes\":" << bytes
              << ",\"busy\":" << (uploadInProgress_.load() ? "true" : "false") << "}";
         res.set_content(json.str(), kJsonType);
     });
@@ -1139,8 +1209,322 @@ void TransferServer::RegisterRetroRoutes()
                 ++removed;
             }
         }
+        for (const std::string &folder : CleanableModParts(mods_, ActiveModUploads())) {
+            const std::uint64_t size = ModLibrary::MeasureTree(folder).first;
+            std::error_code ec;
+            if (std::filesystem::remove_all(folder, ec) > 0 && !ec) {
+                freed += size;
+                ++removed;
+            }
+        }
         PublishEvent("Cleaned up " + HumanBytes(freed) + ".");
         res.set_content("Removed " + std::to_string(removed) + " file(s), " + HumanBytes(freed) + " freed.", kTextType);
+    });
+}
+
+namespace
+{
+
+/** Largest single file of a mod (its music, say) accepted. */
+constexpr std::uint64_t kMaxModFileBytes = 256ull * 1024ull * 1024ull;
+
+/** Which game a mod's engine version is for, for the page. */
+const char *ModGameName(int targetVersion)
+{
+    switch (targetVersion) {
+        case 5: return "Sonic Mania";
+        case 4: return "Sonic 1 and 2";
+        case 3: return "Sonic CD";
+        case -1: return "any game";
+        default: return "an unknown game";
+    }
+}
+
+/** Removes @p path whether it is a link, a file or a folder (a link's target is left alone). */
+void RemoveModPath(const std::filesystem::path &path)
+{
+    std::error_code ec;
+    if (std::filesystem::is_symlink(std::filesystem::symlink_status(path, ec)))
+        std::filesystem::remove(path, ec);
+    else
+        std::filesystem::remove_all(path, ec);
+}
+
+/** Every copy of mod @p folder, and its staged replacements, in every mod folder. */
+void RemoveModEverywhere(const ModLibrary &mods, const std::string &folder)
+{
+    for (const std::string &location : mods.Folders()) {
+        RemoveModPath(std::filesystem::path(location) / folder);
+        RemoveModPath(std::filesystem::path(location) / (folder + ModLibrary::kPendingSuffix));
+    }
+}
+
+/** A drive's mod appears to the engine through a link in the TV's mod folder (see ModLibrary::LinkUsbMods()). */
+void LinkUsbMod(const ModLibrary &mods, const std::string &usbModPath, const std::string &folder)
+{
+    std::error_code ec;
+    const std::filesystem::path link = std::filesystem::path(mods.TvFolder()) / folder;
+    std::filesystem::create_directories(mods.TvFolder(), ec);
+    if (!std::filesystem::exists(std::filesystem::symlink_status(link, ec)))
+        std::filesystem::create_directory_symlink(usbModPath, link, ec);
+}
+
+/** The mod folder a request is about (?mod= or :folder). @return False with an error set when it is not a usable name. */
+bool ModFolderOf(const std::string &folder, httplib::Response &res)
+{
+    if (ModLibrary::IsValidFolderName(folder))
+        return true;
+    Fail(res, 400, "\"" + folder + "\" cannot be a mod folder's name on the TV or a USB drive: rename the folder "
+                   "(letters, digits, spaces, '-', '_' and '.' are fine).");
+    return false;
+}
+
+/** JSON for one mod (@p inUse: on since the engine started). */
+std::string ModJson(const ModEntry &mod, bool inUse)
+{
+    std::ostringstream json;
+    json << "{\"folder\":\"" << JsonEscape(mod.folder) << "\",\"name\":\"" << JsonEscape(mod.name) << "\",\"author\":\""
+         << JsonEscape(mod.author) << "\",\"version\":\"" << JsonEscape(mod.version) << "\",\"description\":\""
+         << JsonEscape(mod.description) << "\",\"game\":\"" << ModGameName(mod.targetVersion) << "\",\"targetVersion\":" << mod.targetVersion
+         << ",\"hasLogic\":" << (mod.hasLogic ? "true" : "false") << ",\"bytes\":" << mod.bytes << ",\"files\":" << mod.files
+         << ",\"location\":\"" << (mod.onUsb ? "usb" : "tv") << "\",\"mount\":\"" << JsonEscape(mod.mount) << "\""
+         << ",\"active\":" << (mod.active ? "true" : "false") << ",\"order\":" << mod.order << ",\"inUse\":" << (inUse ? "true" : "false")
+         << ",\"pending\":" << (mod.pending ? "true" : "false") << ",\"removing\":" << (mod.removing ? "true" : "false")
+         << ",\"shadowed\":" << (mod.shadowed ? "true" : "false") << "}";
+    return json.str();
+}
+
+} // namespace
+
+void TransferServer::RegisterModRoutes()
+{
+    httplib::Server &server = *server_;
+
+    server.Get("/api/mods", [this](const httplib::Request &, httplib::Response &res) {
+        std::ostringstream json;
+        json << "{\"mods\":[";
+        bool first = true;
+        for (const ModEntry &mod : mods_.Scan()) {
+            json << (first ? "" : ",") << ModJson(mod, IsModInUse(mod.folder) && !mod.shadowed);
+            first = false;
+        }
+        json << "]}";
+        res.set_content(json.str(), kJsonType);
+    });
+
+    // A folder upload: begin (a fresh <folder>.part), every file, then finish.
+    server.Post("/api/mods/upload/begin", [this](const httplib::Request &req, httplib::Response &res) {
+        const std::string folder = req.get_param_value("mod");
+        Destination dest;
+        if (!ModFolderOf(folder, res) || !ParseDestination(req, storage_, &dest, res))
+            return;
+        const std::string location = dest.usb ? ModLibrary::UsbFolder(dest.drive.mountPoint) : mods_.TvFolder();
+        const std::string part     = location + "/" + folder + ModLibrary::kPartSuffix;
+        std::lock_guard<std::mutex> lock(modsMutex_);
+        std::error_code ec;
+        std::filesystem::remove_all(part, ec);
+        std::filesystem::create_directories(part, ec);
+        if (ec)
+            return Fail(res, 500, "Could not create " + part + ": " + ec.message());
+        TouchModUpload(part);
+        res.set_content("ready", kTextType);
+    });
+
+    server.Put("/api/mods/upload/file", [this](const httplib::Request &req, httplib::Response &res, const httplib::ContentReader &reader) {
+        const std::string folder = req.get_param_value("mod");
+        const std::string path   = req.get_param_value("path");
+        Destination dest;
+        if (!ModFolderOf(folder, res) || !ParseDestination(req, storage_, &dest, res))
+            return;
+        if (!ModLibrary::IsValidRelativePath(path))
+            return Fail(res, 400, "\"" + path + "\" is not a name the TV or a USB drive can store.");
+        std::uint64_t expected = 0;
+        if (!ContentLength(req, &expected))
+            return Fail(res, 411, "The upload must state its size (Content-Length).");
+        if (expected > kMaxModFileBytes)
+            return Fail(res, 413, path + " is too big for a mod file (" + HumanBytes(expected) + ").");
+        if (expected + dest.margin > dest.free)
+            return Fail(res, 507, "Not enough space there for " + path + ".");
+
+        const std::string location = dest.usb ? ModLibrary::UsbFolder(dest.drive.mountPoint) : mods_.TvFolder();
+        const std::string part     = location + "/" + folder + ModLibrary::kPartSuffix;
+        std::error_code ec;
+        if (!std::filesystem::is_directory(part, ec))
+            return Fail(res, 409, "That upload was not started (or was cleaned up). Upload the folder again.");
+        TouchModUpload(part);
+        const std::filesystem::path target = std::filesystem::path(part) / path;
+        std::filesystem::create_directories(target.parent_path(), ec);
+        const std::int64_t written = StreamBodyToFile(reader, target.string(), expected, [](std::uint64_t) {});
+        if (written < 0 || static_cast<std::uint64_t>(written) != expected) {
+            std::filesystem::remove(target, ec);
+            return Fail(res, 400, "The upload of " + path + " was interrupted.");
+        }
+        TouchModUpload(part);
+        res.set_content("stored", kTextType);
+    });
+
+    server.Post("/api/mods/upload/finish", [this](const httplib::Request &req, httplib::Response &res) {
+        const std::string folder = req.get_param_value("mod");
+        Destination dest;
+        if (!ModFolderOf(folder, res) || !ParseDestination(req, storage_, &dest, res))
+            return;
+        const std::string location = dest.usb ? ModLibrary::UsbFolder(dest.drive.mountPoint) : mods_.TvFolder();
+        const std::string part     = location + "/" + folder + ModLibrary::kPartSuffix;
+        std::lock_guard<std::mutex> lock(modsMutex_);
+        {
+            std::lock_guard<std::mutex> uploadsLock(modUploadsMutex_);
+            modUploads_.erase(part);
+        }
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(std::filesystem::path(part) / ModLibrary::kModIniName, ec)) {
+            std::filesystem::remove_all(part, ec);
+            return Fail(res, 400, folder + " has no mod.ini, so it is not a mod (or the upload was cut short).");
+        }
+
+        const std::vector<ModConfigEntry> config = mods_.ReadConfig();
+        const bool known = std::any_of(config.begin(), config.end(), [&folder](const ModConfigEntry &entry) { return entry.first == folder; });
+        std::string error;
+        if (IsModInUse(folder)) {
+            // The session reads the old copy: the new one takes over at the next start (ModLibrary::ApplyPending()).
+            const std::string pending = location + "/" + folder + ModLibrary::kPendingSuffix;
+            std::filesystem::remove_all(pending, ec);
+            std::filesystem::rename(part, pending, ec);
+            if (ec)
+                return Fail(res, 500, "Could not stage the mod: " + ec.message());
+            PublishEvent("Mod " + folder + " received. It replaces the one in use at the next start.");
+            res.set_content("staged", kTextType);
+            return;
+        }
+
+        RemoveModEverywhere(mods_, folder);
+        const std::string installed = location + "/" + folder;
+        std::filesystem::rename(part, installed, ec);
+        if (ec)
+            return Fail(res, 500, "Could not install the mod: " + ec.message());
+        if (dest.usb)
+            LinkUsbMod(mods_, installed, folder);
+        // A new mod is on: it was uploaded to be played. A replacement keeps its state.
+        if (!known && !mods_.SetActive(folder, true, &error))
+            return Fail(res, 500, error);
+        PublishEvent("Mod " + folder + " installed.");
+        res.set_content("installed", kTextType);
+    });
+
+    server.Put("/api/mods/:folder/active", [this](const httplib::Request &req, httplib::Response &res) {
+        const std::string folder = req.path_params.at("folder");
+        if (!ModFolderOf(folder, res))
+            return;
+        const bool on = req.get_param_value("on") == "1";
+        std::lock_guard<std::mutex> lock(modsMutex_);
+        std::string error;
+        if (!mods_.SetActive(folder, on, &error))
+            return Fail(res, 500, error);
+        PublishEvent(std::string("Mod ") + folder + (on ? " on." : " off."));
+        res.set_content("saved", kTextType);
+    });
+
+    server.Post("/api/mods/:folder/order", [this](const httplib::Request &req, httplib::Response &res) {
+        const std::string folder = req.path_params.at("folder");
+        if (!ModFolderOf(folder, res))
+            return;
+        const int delta = req.get_param_value("delta") == "-1" ? -1 : 1;
+        std::lock_guard<std::mutex> lock(modsMutex_);
+        std::string error;
+        if (!mods_.MoveInOrder(folder, delta, &error))
+            return Fail(res, 400, error);
+        res.set_content("saved", kTextType);
+    });
+
+    server.Post("/api/mods/:folder/move", [this](const httplib::Request &req, httplib::Response &res) {
+        const std::string folder = req.path_params.at("folder");
+        Destination dest;
+        if (!ModFolderOf(folder, res) || !ParseDestination(req, storage_, &dest, res))
+            return;
+        if (uploadInProgress_.exchange(true))
+            return Fail(res, 409, "Another upload or move is running. Try again when it has finished.");
+        const std::unique_ptr<std::atomic<bool>, void (*)(std::atomic<bool> *)> uploadGuard(
+            &uploadInProgress_, [](std::atomic<bool> *flag) { flag->store(false); });
+        std::lock_guard<std::mutex> lock(modsMutex_);
+
+        ModEntry source;
+        bool found = false;
+        for (const ModEntry &mod : mods_.Scan()) {
+            if (mod.folder == folder && !mod.shadowed) {
+                source = mod;
+                found  = true;
+            }
+        }
+        if (!found)
+            return Fail(res, 404, "No mod " + folder + ".");
+        if (source.onUsb == dest.usb && (!dest.usb || source.mount == dest.drive.mountPoint))
+            return Fail(res, 400, folder + " is there already.");
+        if (source.bytes + dest.margin > dest.free)
+            return Fail(res, 507, "Not enough space there: " + folder + " needs " + HumanBytes(source.bytes + dest.margin) + ".");
+
+        const std::string location = dest.usb ? ModLibrary::UsbFolder(dest.drive.mountPoint) : mods_.TvFolder();
+        const std::string part     = location + "/" + folder + ModLibrary::kPartSuffix;
+        std::error_code ec;
+        std::filesystem::remove_all(part, ec);
+        {
+            std::lock_guard<std::mutex> statusLock(statusMutex_);
+            status_.uploading     = true;
+            status_.receivedBytes = 0;
+            status_.expectedBytes = source.bytes;
+        }
+        const bool copied = ModLibrary::CopyTree(source.path, part, [this](std::uint64_t total) {
+            std::lock_guard<std::mutex> statusLock(statusMutex_);
+            status_.receivedBytes = total;
+        });
+        {
+            std::lock_guard<std::mutex> statusLock(statusMutex_);
+            status_.uploading = false;
+        }
+        if (!copied) {
+            std::filesystem::remove_all(part, ec);
+            return Fail(res, 500, "Could not copy " + folder + ".");
+        }
+
+        if (IsModInUse(folder)) {
+            // The copy takes over (and the source goes) at the next start: ModLibrary::ApplyPending().
+            const std::string pending = location + "/" + folder + ModLibrary::kPendingSuffix;
+            std::filesystem::remove_all(pending, ec);
+            std::filesystem::rename(part, pending, ec);
+            if (ec)
+                return Fail(res, 500, "Could not stage the move: " + ec.message());
+            res.set_content("staged", kTextType);
+            return;
+        }
+        RemoveModEverywhere(mods_, folder);
+        const std::string installed = location + "/" + folder;
+        std::filesystem::rename(part, installed, ec);
+        if (ec)
+            return Fail(res, 500, "Could not finish the move: " + ec.message());
+        if (dest.usb)
+            LinkUsbMod(mods_, installed, folder);
+        PublishEvent("Mod " + folder + " moved.");
+        res.set_content("moved", kTextType);
+    });
+
+    server.Delete("/api/mods/:folder", [this](const httplib::Request &req, httplib::Response &res) {
+        const std::string folder = req.path_params.at("folder");
+        if (!ModFolderOf(folder, res))
+            return;
+        std::lock_guard<std::mutex> lock(modsMutex_);
+        std::string error;
+        // Off the list now, so a game switch does not load it; the files go at the next start if in use.
+        if (!mods_.Forget(folder, &error))
+            return Fail(res, 500, error);
+        if (IsModInUse(folder)) {
+            std::ofstream marker(mods_.TvFolder() + "/" + folder + ModLibrary::kDeleteSuffix, std::ios::trunc);
+            if (!marker)
+                return Fail(res, 500, "Could not mark " + folder + " for removal.");
+            PublishEvent("Mod " + folder + " is removed at the next start.");
+            res.set_content("staged", kTextType);
+            return;
+        }
+        RemoveModEverywhere(mods_, folder);
+        PublishEvent("Mod " + folder + " removed.");
+        res.set_content("removed", kTextType);
     });
 }
 

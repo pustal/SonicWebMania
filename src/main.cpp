@@ -12,6 +12,9 @@
  * tells it what only the TV app knows: the packs on USB drives, the transfer
  * page's address, and settings changed on the page (applied once per frame,
  * on the engine's thread). The remote's buttons are mapped by PortRuntime.
+ * Mods (the engine's mod loader) are managed on the page; before the engine
+ * starts, staged mod changes are applied and the USB drives' mods linked in
+ * (see port/ModLibrary.h).
  *
  * Replaces RSDKv5/main.cpp from the engine (excluded in cmake/RSDKPlatform-webOS.cmake).
  */
@@ -25,6 +28,7 @@
 #undef EngineInfo
 
 #include "port/IniEdit.h"
+#include "port/ModLibrary.h"
 #include "port/NetInfo.h"
 #include "port/PlusFiles.h"
 #include "port/PortRuntime.h"
@@ -207,7 +211,8 @@ int32 main(int32 argc, char *argv[])
     }
 
     swm::RetroLibrary retro(storage);
-    const int applied = storage.ApplyPendingFiles() + retro.ApplyPendingPacks();
+    swm::ModLibrary mods(storage);
+    const int applied = storage.ApplyPendingFiles() + retro.ApplyPendingPacks() + mods.ApplyPending();
     if (applied > 0)
         std::printf("SonicWebMania: applied %d file(s) uploaded or moved during the last session\n", applied);
     storage.TrimLog();
@@ -216,7 +221,7 @@ int32 main(int32 argc, char *argv[])
 
     swm::SettingsChannel settings(swm::ReadSavedSettings(storage));
     session.settings = &settings;
-    swm::TransferServer server(storage, settings, retro, swm::GeneratePin());
+    swm::TransferServer server(storage, settings, retro, mods, swm::GeneratePin());
     const bool serverRunning = server.Start();
     if (serverRunning)
         std::printf("SonicWebMania: transfer page on port %u, PIN %s\n", static_cast<unsigned>(server.Port()), server.Pin().c_str());
@@ -246,6 +251,9 @@ int32 main(int32 argc, char *argv[])
         std::fprintf(stderr, "SonicWebMania: %s\n", error.c_str());
 
     server.SetPacksInUse(PacksInUse(maniaPack, retro));
+    // The engine finds the drives' mods through links in its own mod folder; those on now are read all session.
+    mods.LinkUsbMods();
+    server.SetModsInUse(mods.ActiveFolders());
     server.SetSetupMode(false);
     ConfigurePlus(retro, serverRunning ? &server : nullptr);
     std::fflush(stdout);

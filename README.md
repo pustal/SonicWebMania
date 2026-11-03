@@ -2,7 +2,7 @@
 
 # SonicWebMania
 
-**Version 3.0.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+**Version 3.1.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
 and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations, through their Plus
 forks ([RSDKv5-Decompilation-Plus](https://github.com/pustal/RSDKv5-Decompilation-Plus) and
 [Sonic-Mania-Decompilation-Plus](https://github.com/pustal/Sonic-Mania-Decompilation-Plus)), built as a
@@ -24,6 +24,8 @@ forks ([RSDKv5-Decompilation-Plus](https://github.com/pustal/RSDKv5-Decompilatio
 - **Achievements.** The game's 18 achievements unlock as you play (the engine records them
   in `Achievements.bin`, next to your saves). The menu lists them all, unlocked and locked,
   with how to get each one; each retro game has its own twelve.
+- **Mods.** The engine's mod loader is on: upload a mod's folder (or a folder of mods) from
+  the transfer page, to the TV or a USB drive, and turn each on or off. See [Mods](#mods).
 - **Light on storage.** Uploads are streamed straight to disk, free space is checked
   before anything is written, and the engine's log is off.
 
@@ -195,6 +197,29 @@ How each game plays depends on what you upload:
   engine keeps them. The retro games no longer need turning on: they are offered whenever
   their packs are there.
 
+## Mods
+
+The engine's mod loader (from the RSDKv5 decompilation) loads mods for Sonic Mania, and for
+Sonic 1, 2 and CD in their own game: a mod is a folder with a `mod.ini` (its name, author,
+version and the engine it targets) and the game files it replaces.
+
+- **Upload** on the transfer page: **Upload a mod folder** takes a mod's folder, or a folder
+  holding several mods (each folder with a `mod.ini` becomes one). Unzip a downloaded mod
+  first. Mods go where **Store packs and mods on** says, and are on once uploaded.
+- **On the TV** they live in `mods/<folder>` in the app's data folder; **on a USB drive** in
+  `SonicWebMania/mods/<folder>`. The engine only looks in its own folder, so at each start the
+  app links each drive's mods into it (a mod on the TV wins over one of the same name).
+- **Manage** each mod there: on or off, up or down (when two mods change the same file, the
+  higher one wins), move between the TV and a drive, or remove. The list is the engine's own
+  `mods/modconfig.ini`.
+- Changes apply the next time a game starts: **Restart game** in the Plus menu, or switching
+  games there. A mod that was on when the game started is in use until then, so replacing,
+  moving or removing it is staged and finishes at the next start.
+- **Code mods** (a `LogicFile` in `mod.ini`) are libraries built for one system; those made
+  for Windows or desktop Linux don't load on the TV, and the page says so.
+- **Clean up** also removes what interrupted mod uploads and moves leave behind
+  (`<folder>.part`).
+
 ## Disk space
 
 Measured from the release build (`cmake --build build-webos --target webos-package`
@@ -284,12 +309,13 @@ src/port/
   SettingsChannel.*         hands the page's settings changes to the engine's thread
   PlusFiles.*               reads the engine's Plus.ini / Settings.ini; moves a 2.x install's settings and saves
   RetroGames.*              Sonic 1, 2 and CD: finds their packs (TV and USB) for the page and the setup screen
+  ModLibrary.*              mods on the TV and USB drives, modconfig.ini, staged changes, links for the engine
   IniEdit.*                 rewrites Sonic Mania's pack path in Settings.ini before each start
   RsdkPack.*                looks inside packs; converts Sonic CD's 2011 pack
   Md5.*                     MD5 for pack file names
   UsbDrives.*               mounted USB drives (from /proc/mounts)
   SetupScreen.*             first-run screen (address, PIN, free space, progress)
-  TransferServer.*          HTTP server (cpp-httplib) for data, saves and settings
+  TransferServer.*          HTTP server (cpp-httplib) for data, saves, mods and settings
   Storage.*                 data folder, Sonic Mania's pack (TV or USB), free space, staged uploads, log trimming
   PortInfo.h                app version (from CMake) and project address
   BitmapFont.* TextRenderer.cpp   built-in 8x8 font, so text works before any game data exists
