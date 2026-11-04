@@ -14,7 +14,9 @@
  * on the engine's thread). The remote's buttons are mapped by PortRuntime.
  * Mods (the engine's mod loader) are managed on the page; before the engine
  * starts, staged mod changes are applied and the USB drives' mods linked in
- * (see port/ModLibrary.h).
+ * (see port/ModLibrary.h). Sonic Origins' sound files are uploaded on the
+ * page too, and converted by the engine when the page asks (its Plus module,
+ * RSDK::Plus::StartOriginsAudioConversion()).
  *
  * Replaces RSDKv5/main.cpp from the engine (excluded in cmake/RSDKPlatform-webOS.cmake).
  */
@@ -45,6 +47,7 @@
 #include <cstring>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -116,9 +119,38 @@ RSDK::Plus::Settings ToPlusSettings(const swm::GameSettings &settings)
 /** What the engine's callbacks (plain function pointers) reach. */
 struct Session {
     swm::SettingsChannel *settings = nullptr;
-    bool restartRequested          = false; ///< "Restart game" was chosen in the Plus menu.
+    swm::TransferServer *server    = nullptr;
+    const swm::RetroLibrary *retro = nullptr;
+    std::string maniaPack;                  ///< Sonic Mania's pack this session ("" without it).
+    bool restartRequested  = false;         ///< "Restart game" was chosen in the Plus menu.
+    bool originsConverting = false;         ///< A Sonic Origins audio conversion was running last frame.
 };
 Session session;
+
+/**
+ * Every pack the engine may read this session (see TransferServer::SetPacksInUse()):
+ * Sonic Mania's, the retro games' and their converted Sonic Origins audio.
+ */
+std::vector<std::string> PacksInUse(const std::string &maniaPack, const swm::RetroLibrary &retro)
+{
+    std::vector<std::string> packs;
+    if (!maniaPack.empty())
+        packs.push_back(maniaPack);
+    for (const swm::RetroGame &game : retro.Scan()) {
+        for (const swm::RetroPack *pack : { &game.origins, &game.classic }) {
+            if (pack->state == swm::PackState::Ready || pack->state == swm::PackState::Unsupported)
+                packs.push_back(pack->path);
+        }
+    }
+    for (const std::string &folder : retro.PackFolders()) {
+        for (const swm::RetroGameInfo &game : swm::RetroCatalogue()) {
+            const std::string path = folder + "/" + game.id + swm::TransferServer::kOriginsPackSuffix;
+            if (swm::Storage::FileSize(path) > 0)
+                packs.push_back(path);
+        }
+    }
+    return packs;
+}
 
 /**
  * Once per frame on the engine's thread (RSDK::Plus::SetFrameCallback()):
@@ -133,6 +165,12 @@ void OnEngineFrame()
     if (session.settings->TakeRequest(&requested))
         RSDK::Plus::ApplySettings(ToPlusSettings(requested));
     session.settings->Publish(ToGameSettings(RSDK::Plus::CurrentSettings()));
+
+    // A conversion wrote new audio packs, which the engine now reads: the page must leave them alone.
+    const bool converting = RSDK::Plus::GetOriginsAudioStatus().running;
+    if (session.originsConverting && !converting && session.server)
+        session.server->SetPacksInUse(PacksInUse(session.maniaPack, *session.retro));
+    session.originsConverting = converting;
 }
 
 /**
@@ -146,20 +184,6 @@ void RequestRestart()
     RSDK::RenderDevice::isRunning = false;
 }
 
-/** Every pack the engine may read this session (see TransferServer::SetPacksInUse()). */
-std::vector<std::string> PacksInUse(const std::string &maniaPack, const swm::RetroLibrary &retro)
-{
-    std::vector<std::string> packs;
-    if (!maniaPack.empty())
-        packs.push_back(maniaPack);
-    for (const swm::RetroGame &game : retro.Scan()) {
-        for (const swm::RetroPack *pack : { &game.origins, &game.classic }) {
-            if (pack->state == swm::PackState::Ready || pack->state == swm::PackState::Unsupported)
-                packs.push_back(pack->path);
-        }
-    }
-    return packs;
-}
 
 /** Tells the Plus module what only the app knows: the USB drives' packs, the page's address, "Restart game". */
 void ConfigurePlus(const swm::RetroLibrary &retro, const swm::TransferServer *server)
@@ -175,10 +199,12 @@ void ConfigurePlus(const swm::RetroLibrary &retro, const swm::TransferServer *se
         texts.menuInfo         = "Transfer page: " + page + "  PIN " + server->Pin();
         texts.packHint         = "Add retro packs from the transfer page on a phone or computer: " + page
                          + ". Then choose Restart game.";
+        texts.originsAudioHint = "Upload them on the transfer page (" + page + "), then press OK here or Convert there.";
     }
     else {
-        texts.menuInfo = "Connect the TV to a network to reach the transfer page.";
-        texts.packHint = "Add retro packs from the transfer page (the TV must be on a network), then choose Restart game.";
+        texts.menuInfo         = "Connect the TV to a network to reach the transfer page.";
+        texts.packHint         = "Add retro packs from the transfer page (the TV must be on a network), then choose Restart game.";
+        texts.originsAudioHint = "Upload them on the transfer page (the TV must be on a network), then press OK here.";
     }
     RSDK::Plus::SetPlatformTexts(texts);
     RSDK::Plus::AddMenuAction("Restart game", &RequestRestart);
@@ -222,6 +248,20 @@ int32 main(int32 argc, char *argv[])
     swm::SettingsChannel settings(swm::ReadSavedSettings(storage));
     session.settings = &settings;
     swm::TransferServer server(storage, settings, retro, mods, swm::GeneratePin());
+    swm::OriginsAudioHooks origins;
+    origins.fileNames.assign(std::begin(RSDK::Plus::kOriginsAudioFileNames), std::end(RSDK::Plus::kOriginsAudioFileNames));
+    origins.start  = [] { return RSDK::Plus::StartOriginsAudioConversion() != 0; };
+    origins.status = [] {
+        const RSDK::Plus::OriginsAudioStatus status = RSDK::Plus::GetOriginsAudioStatus();
+        swm::OriginsAudioState state;
+        state.running = status.running;
+        state.percent = status.percent;
+        state.message = status.message;
+        return state;
+    };
+    server.SetOriginsAudioHooks(std::move(origins));
+    session.server = &server;
+    session.retro  = &retro;
     const bool serverRunning = server.Start();
     if (serverRunning)
         std::printf("SonicWebMania: transfer page on port %u, PIN %s\n", static_cast<unsigned>(server.Port()), server.Pin().c_str());
@@ -250,6 +290,7 @@ int32 main(int32 argc, char *argv[])
     if (!swm::UpdateIniFile(storage.PathFor("Settings.ini"), kDefaultSettings, "Game", { { "dataFile", dataFile } }, &error))
         std::fprintf(stderr, "SonicWebMania: %s\n", error.c_str());
 
+    session.maniaPack = maniaPack;
     server.SetPacksInUse(PacksInUse(maniaPack, retro));
     // The engine finds the drives' mods through links in its own mod folder; those on now are read all session.
     mods.LinkUsbMods();

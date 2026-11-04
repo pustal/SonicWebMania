@@ -14,6 +14,7 @@ file); the decompilations' licences are in `LICENSE.md`.
 | [libtheora](https://github.com/xiph/theora) | Cutscene video decoder | BSD-3-Clause (`licenses/libtheora.txt`) |
 | [TinyXML-2](https://github.com/leethomason/tinyxml2) | Engine dependency | zlib (`licenses/TinyXML-2.txt`) |
 | [stb_vorbis](https://github.com/nothings/stb) | Music decoding (engine dependency) | Public domain / MIT (`licenses/stb_vorbis.txt`) |
+| [clHCA](https://github.com/vgmstream/vgmstream) (from vgmstream) | Sonic Origins' audio (HCA) decoding (engine dependency) | ISC (`licenses/clHCA.txt`) |
 | iniparser, miniz | Engine dependencies (vendored in the engine) | MIT (`licenses/iniparser.txt`, `licenses/miniz.txt`) |
 | [font8x8](https://github.com/dhepper/font8x8) by Daniel Hepper | Built-in 8x8 font for the setup screen and menu | Public domain |
 

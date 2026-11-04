@@ -93,8 +93,8 @@
     <section id="retro-section">
       <h2>Retro games (Sonic 1, 2 and CD)</h2>
       <p class="dim">Played from your own data packs, and chosen on the TV in the Plus menu (press BACK, then Games).
-        With the pack from Sonic Origins alone a game has no sound (Origins keeps its music elsewhere); add the pack of the
-        earlier release and its music and sound effects are used. The earlier Sonic 1 and 2 packs and the mobile Sonic CD
+        With the pack from Sonic Origins alone a game has no sound (Origins keeps its music elsewhere: see Sonic Origins
+        audio below); add the pack of the earlier release and its music and sound effects are used. The earlier Sonic 1 and 2 packs and the mobile Sonic CD
         pack also play on their own. New packs show up after "Restart game".</p>
       <p><label><input id="mania-audio" type="checkbox"> Fill missing music and sounds from Sonic Mania</label></p>
       <p class="dim">With Sonic Mania's Data.rsdk installed: sounds the packs lack (all of them with the Origins pack alone,
@@ -109,6 +109,25 @@
       <div id="retro-games"></div>
       <progress id="retro-progress" class="hidden" max="100" value="0"></progress>
       <p id="retro-message"></p>
+    </section>
+
+    <section id="origins-section">
+      <h2>Sonic Origins audio</h2>
+      <p class="dim">Sonic Origins keeps the retro games' music and sounds in files of its own, not in its packs. Upload
+        them here and the TV converts them: Sonic 1, 2 and CD then play Sonic Origins' own music and sounds, with the
+        earlier release's pack and Sonic Mania filling any gaps. They are in Sonic Origins' <code>image/x64/raw/sound</code>
+        folder (on Steam: right-click Sonic Origins, Manage, Browse local files). Choose all of them at once; the page
+        takes the ones listed below. They go where "Store packs and mods on" says.</p>
+      <label class="button" for="origins-files">Upload the files</label>
+      <input id="origins-files" type="file" multiple accept=".acb,.awb">
+      <button id="origins-convert" type="button" disabled>Convert</button>
+      <progress id="origins-progress" class="hidden" max="100" value="0"></progress>
+      <p id="origins-message"></p>
+      <div id="origins-files-list"></div>
+      <div id="origins-packs"></div>
+      <p><button id="origins-remove-files" class="secondary hidden" type="button">Remove the uploaded files</button></p>
+      <p class="dim">Converting takes a minute or two (the TV does it, while you play if you like); a retro game being
+        played restarts when it is done. Afterwards the uploaded files are not needed: remove them to free the space.</p>
     </section>
 
     <section id="mods-section">
@@ -169,6 +188,10 @@
  *             mount: string, active: boolean, order: number, inUse: boolean, pending: boolean, removing: boolean,
  *             shadowed: boolean }} Mod
  * @typedef {{ folder: string, files: { file: File, path: string }[], bytes: number }} ModUpload
+ * @typedef {{ name: string, location?: 'tv'|'usb', mount?: string, size?: number }} OriginsFile
+ * @typedef {{ game: string, title: string, location?: 'tv'|'usb', size?: number, inUse?: boolean }} OriginsPack
+ * @typedef {{ available: boolean, running: boolean, percent: number, message: string, files: OriginsFile[],
+ *             packs: OriginsPack[] }} OriginsState
  */
 
 /** Session-only so the PIN is forgotten when the tab closes. */
@@ -204,6 +227,13 @@ let modRemoveArmed = '';
 const MAX_MOD_FILE_BYTES = 256 * 1024 * 1024;
 /** Mod files sent at the same time (the TV serves two requests at once). */
 const PARALLEL_MOD_UPLOADS = 2;
+/** @type {OriginsState | null} */
+let lastOrigins = null;
+/** Polls the conversion while it runs. */
+let originsPoll = 0;
+/** Which game each Sonic Origins file is for, shown next to it. */
+const ORIGINS_FILE_GAMES = { HITE: 'all three games', STH1: 'Sonic 1 (and three of Sonic 2\'s jingles)', STH2: 'Sonic 2', SCD: 'Sonic CD' };
+
 /** The retro games' ids, from the last file listing (for the download-name prefix). */
 let retroGameIds = /** @type {string[]} */ ([]);
 
@@ -432,7 +462,7 @@ function renderPackDestinations() {
   renderManiaPack();
   byId('pack-dest-line').textContent = drive
     ? 'On the drive, Sonic Mania\'s Data.rsdk goes in the SonicWebMania folder, the retro packs in SonicWebMania/retro'
-      + ' and mods in SonicWebMania/mods'
+      + ', Sonic Origins\' sound files in SonicWebMania/retro/origins and mods in SonicWebMania/mods'
       + (drive.hasFolder ? '.' : ' (created with the first upload).')
     : 'Packs go in the app\'s storage on the TV. A USB drive saves the TV\'s space.';
 }
@@ -1048,13 +1078,176 @@ async function uploadMods(files) {
 }
 
 
+// ---------------------
+// Sonic Origins audio
+// ---------------------
+
+/** @param {string} text @param {string} [kind] '', 'ok' or 'warn' */
+function originsSay(text, kind = '') {
+  const message = byId('origins-message');
+  message.textContent = text;
+  message.className = kind;
+}
+
+async function refreshOrigins() {
+  const state = /** @type {OriginsState} */ (await (await api('/api/origins')).json());
+  lastOrigins = state;
+
+  const list = byId('origins-files-list');
+  list.replaceChildren();
+  const table = document.createElement('table');
+  const body = document.createElement('tbody');
+  for (const file of state.files) {
+    const row = document.createElement('tr');
+    const name = document.createElement('td');
+    name.textContent = file.name;
+    const game = document.createElement('td');
+    game.className = 'dim';
+    game.textContent = ORIGINS_FILE_GAMES[file.name.split('_')[0]] || '';
+    const where = document.createElement('td');
+    where.className = file.location ? 'ok' : 'dim';
+    where.textContent = file.location
+      ? (file.location === 'usb' ? 'on the USB drive' : 'on the TV') + ' (' + humanBytes(file.size || 0) + ')'
+      : 'not uploaded';
+    row.append(name, game, where);
+    body.append(row);
+  }
+  table.append(body);
+  list.append(table);
+
+  const packs = byId('origins-packs');
+  packs.replaceChildren();
+  for (const pack of state.packs) {
+    const row = document.createElement('div');
+    row.className = 'pack';
+    const info = document.createElement('div');
+    info.append(pack.title + ': ');
+    const where = document.createElement('span');
+    where.className = pack.location ? 'ok' : 'dim';
+    where.textContent = pack.location
+      ? 'converted, on the ' + (pack.location === 'usb' ? 'USB drive' : 'TV') + ' (' + humanBytes(pack.size || 0) + ')'
+        + (pack.inUse ? ', in use now' : '')
+      : 'not converted';
+    info.append(where);
+    row.append(info);
+    if (pack.location && !pack.inUse) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'secondary';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => removeOriginsPack(pack).catch(() => undefined));
+      row.append(remove);
+    }
+    packs.append(row);
+  }
+
+  const uploaded = state.files.filter((f) => f.location);
+  const convert = /** @type {HTMLButtonElement} */ (byId('origins-convert'));
+  convert.disabled = !state.available || state.running || packBusy || !uploaded.some((f) => f.name.endsWith('.acb'));
+  convert.title = state.available ? '' : 'The game must be running on the TV.';
+  byId('origins-remove-files').classList.toggle('hidden', uploaded.length === 0 || state.running);
+
+  const progress = /** @type {HTMLProgressElement} */ (byId('origins-progress'));
+  progress.classList.toggle('hidden', !state.running);
+  progress.value = state.percent;
+  if (state.running) {
+    originsSay(state.message + ' ' + state.percent + '%');
+    if (!originsPoll) originsPoll = setInterval(() => refreshOrigins().catch(() => undefined), 1000);
+  } else if (originsPoll) {
+    clearInterval(originsPoll);
+    originsPoll = 0;
+    originsSay(state.message, state.message.includes('Failed') || state.message.startsWith('No files') ? 'warn' : 'ok');
+    refreshCleanup().catch(() => undefined);
+  }
+}
+
+/**
+ * Uploads the Sonic Origins files among @p files (one at a time), skipping the others.
+ * @param {File[]} files
+ */
+async function uploadOriginsFiles(files) {
+  if (!lastOrigins) return;
+  if (packBusy) {
+    originsSay('Wait for the current upload or move to finish.', 'warn');
+    return;
+  }
+  // Names as the TV expects them, whatever case the computer gave them.
+  const wanted = new Map(lastOrigins.files.map((f) => [f.name.toLowerCase(), f.name]));
+  const chosen = files.filter((f) => wanted.has(f.name.toLowerCase()));
+  const skipped = files.length - chosen.length;
+  if (chosen.length === 0) {
+    originsSay('None of those are the files listed below (from Sonic Origins\' image/x64/raw/sound folder).', 'warn');
+    return;
+  }
+  const total = chosen.reduce((sum, f) => sum + f.size, 0);
+  const space = packSpace();
+  if (total + space.margin > space.free) {
+    originsSay('Not enough space there: needs ' + humanBytes(total + space.margin) + ', ' + humanBytes(space.free) + ' free.', 'warn');
+    return;
+  }
+
+  packBusy = true;
+  const progress = /** @type {HTMLProgressElement} */ (byId('origins-progress'));
+  progress.classList.remove('hidden');
+  progress.value = 0;
+  const query = destinationQuery(packDestination());
+  let sent = 0;
+  const problems = [];
+  for (const file of chosen) {
+    originsSay('Uploading ' + file.name + ' (' + humanBytes(file.size) + ')... keep this page open.');
+    const name = /** @type {string} */ (wanted.get(file.name.toLowerCase()));
+    const result = await putWithProgress('/api/origins/files/' + encodeURIComponent(name) + '?' + query, file,
+      (fraction) => { progress.value = Math.floor(((sent + fraction * file.size) / total) * 100); });
+    if (!result.ok) problems.push(name + ': ' + result.text);
+    sent += file.size;
+  }
+  packBusy = false;
+  progress.classList.add('hidden');
+  const note = skipped ? ' Skipped ' + skipped + ' other file(s).' : '';
+  if (problems.length) originsSay(problems.join(' ') + note, 'warn');
+  else originsSay('Uploaded ' + chosen.length + ' file(s).' + note + ' Press Convert when they are all there.', 'ok');
+  await Promise.all([refreshOrigins(), refreshStatus(), refreshRetro()]);
+}
+
+async function convertOrigins() {
+  const response = await api('/api/origins/convert', { method: 'POST' });
+  if (!response.ok) {
+    originsSay(await response.text(), 'warn');
+    return;
+  }
+  originsSay('Converting on the TV...');
+  await refreshOrigins();
+}
+
+/** @param {OriginsPack} pack */
+async function removeOriginsPack(pack) {
+  const response = await api('/api/origins/packs/' + pack.game, { method: 'DELETE' });
+  originsSay(response.ok ? pack.title + ': Sonic Origins audio removed.' : await response.text(), response.ok ? '' : 'warn');
+  await Promise.all([refreshOrigins(), refreshStatus()]);
+}
+
+byId('origins-files').addEventListener('change', (event) => {
+  const input = /** @type {HTMLInputElement} */ (event.target);
+  const files = input.files ? Array.from(input.files) : [];
+  if (files.length > 0) uploadOriginsFiles(files).catch((error) => originsSay(String(error), 'warn'));
+  input.value = '';
+});
+
+byId('origins-convert').addEventListener('click', () => { convertOrigins().catch(() => undefined); });
+
+byId('origins-remove-files').addEventListener('click', async () => {
+  const response = await api('/api/origins/files', { method: 'DELETE' });
+  originsSay(await response.text(), response.ok ? 'ok' : 'warn');
+  await Promise.all([refreshOrigins(), refreshStatus(), refreshRetro()]);
+});
+
 byId('pin-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const input = /** @type {HTMLInputElement} */ (byId('pin-input'));
   sessionStorage.setItem(PIN_KEY, input.value.trim());
   try {
     await Promise.all([refreshStatus(), refreshFiles(), refreshRetro(), refreshCleanup()]);
-    await refreshMods(); // After the drives (refreshRetro), which name where each mod is.
+    await Promise.all([refreshMods(), refreshOrigins()]); // After the drives (refreshRetro), which name where each is.
   } catch (error) {
     // showPinForm() already explained a wrong PIN.
   }
@@ -1132,10 +1325,13 @@ byId('mod-stop').addEventListener('click', () => { modStopRequested = true; });
 
 if (pin()) {
   Promise.all([refreshStatus(), refreshFiles(), refreshRetro(), refreshCleanup()])
-    .then(() => refreshMods()).catch(() => undefined);
+    .then(() => Promise.all([refreshMods(), refreshOrigins()])).catch(() => undefined);
 }
 setInterval(() => {
-  if (pin() && !byId('app').classList.contains('hidden')) refreshStatus().catch(() => undefined);
+  if (!pin() || byId('app').classList.contains('hidden')) return;
+  refreshStatus().catch(() => undefined);
+  // A conversion may also be started from the TV's Plus menu.
+  if (!originsPoll && !packBusy) refreshOrigins().catch(() => undefined);
 }, REFRESH_MS);
 </script>
 </body>

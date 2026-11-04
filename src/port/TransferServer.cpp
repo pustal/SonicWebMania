@@ -29,6 +29,11 @@
  *   POST /api/mods/:folder/order?delta=-1|1 moves a mod up (higher priority) or down
  *   POST /api/mods/:folder/move?dest=tv|usb[&mount=...]   moves a mod between the TV and a drive
  *   DELETE /api/mods/:folder            removes a mod (one in use: at the next start)
+ *   GET  /api/origins         JSON: Sonic Origins' sound files found, the conversion's state, the converted packs
+ *   PUT  /api/origins/files/:name?dest=tv|usb[&mount=...]   raw body = one of Sonic Origins' sound files
+ *   DELETE /api/origins/files removes those files (once converted they are not needed)
+ *   POST /api/origins/convert has the engine convert them (see RSDK::Plus::StartOriginsAudioConversion())
+ *   DELETE /api/origins/packs/:game   removes a game's converted audio
  *   GET  /api/cleanup         JSON: leftovers of interrupted uploads, moves and conversions
  *   POST /api/cleanup         removes them
  *
@@ -352,8 +357,10 @@ std::vector<std::string> CleanableFiles(const Storage &storage, const RetroLibra
                 folders.push_back(game.path().string());
         }
     }
-    for (const std::string &packFolder : retro.PackFolders())
+    for (const std::string &packFolder : retro.PackFolders()) {
         folders.push_back(packFolder);
+        folders.push_back(packFolder + "/" + TransferServer::kOriginsFolderName); // Interrupted uploads of Sonic Origins' files.
+    }
     for (const UsbDrive &drive : ListUsbDrives())
         folders.push_back(Storage::UsbFolder(drive.mountPoint));
 
@@ -813,6 +820,7 @@ void TransferServer::RegisterRoutes()
 
     RegisterRetroRoutes();
     RegisterModRoutes();
+    RegisterOriginsRoutes();
 }
 
 namespace
@@ -1193,7 +1201,9 @@ void TransferServer::RegisterRetroRoutes()
     });
 
     server.Post("/api/cleanup", [this](const httplib::Request &, httplib::Response &res) {
-        // A running upload or move writes one of these files: wait for it.
+        // A running upload, move or conversion writes one of these files: wait for it.
+        if (OriginsConversionRunning())
+            return Fail(res, 409, "Sonic Origins' audio is being converted. Clean up when it has finished.");
         if (uploadInProgress_.exchange(true))
             return Fail(res, 409, "An upload or move is running. Clean up when it has finished.");
         const std::unique_ptr<std::atomic<bool>, void (*)(std::atomic<bool> *)> uploadGuard(
@@ -1524,6 +1534,229 @@ void TransferServer::RegisterModRoutes()
         }
         RemoveModEverywhere(mods_, folder);
         PublishEvent("Mod " + folder + " removed.");
+        res.set_content("removed", kTextType);
+    });
+}
+
+namespace
+{
+
+/** Largest Sonic Origins sound file accepted (the biggest, SCD_music.awb, is about 270 MB). */
+constexpr std::uint64_t kMaxOriginsFileBytes = 512ull * 1024ull * 1024ull;
+
+/** "tv" or "usb" for @p path, with the drive's mount point. */
+std::string LocationOf(const std::string &path, std::string *mount)
+{
+    UsbDrive drive;
+    if (DriveOf(path, &drive)) {
+        *mount = drive.mountPoint;
+        return "usb";
+    }
+    mount->clear();
+    return "tv";
+}
+
+} // namespace
+
+bool TransferServer::OriginsConversionRunning() const { return originsHooks_.status && originsHooks_.status().running; }
+
+void TransferServer::RegisterOriginsRoutes()
+{
+    httplib::Server &server = *server_;
+
+    // Where Sonic Origins' files are: each pack folder's "origins" folder (the
+    // engine takes each file from the first that has it).
+    const auto originsFolders = [this]() {
+        std::vector<std::string> folders;
+        for (const std::string &folder : retro_.PackFolders())
+            folders.push_back(folder + "/" + kOriginsFolderName);
+        return folders;
+    };
+    const auto knownFile = [this](const std::string &name) {
+        return std::find(originsHooks_.fileNames.begin(), originsHooks_.fileNames.end(), name) != originsHooks_.fileNames.end();
+    };
+
+    server.Get("/api/origins", [this, originsFolders](const httplib::Request &, httplib::Response &res) {
+        const OriginsAudioState state = originsHooks_.status ? originsHooks_.status() : OriginsAudioState();
+        std::ostringstream json;
+        json << "{\"available\":" << (originsHooks_.start && !setupMode_.load() ? "true" : "false")
+             << ",\"running\":" << (state.running ? "true" : "false") << ",\"percent\":" << state.percent << ",\"message\":\""
+             << JsonEscape(state.message) << "\",\"files\":[";
+        bool first = true;
+        for (const std::string &name : originsHooks_.fileNames) {
+            json << (first ? "" : ",") << "{\"name\":\"" << JsonEscape(name) << "\"";
+            first = false;
+            for (const std::string &folder : originsFolders()) {
+                const std::string path = folder + "/" + name;
+                std::error_code ec;
+                if (!std::filesystem::is_regular_file(path, ec))
+                    continue;
+                std::string mount;
+                const std::string location = LocationOf(path, &mount);
+                json << ",\"location\":\"" << location << "\",\"mount\":\"" << JsonEscape(mount) << "\",\"size\":" << Storage::FileSize(path);
+                break;
+            }
+            json << "}";
+        }
+        json << "],\"packs\":[";
+        first = true;
+        for (const RetroGameInfo &game : RetroCatalogue()) {
+            json << (first ? "" : ",") << "{\"game\":\"" << game.id << "\",\"title\":\"" << JsonEscape(game.title) << "\"";
+            first = false;
+            for (const std::string &folder : retro_.PackFolders()) {
+                const std::string path = folder + "/" + game.id + kOriginsPackSuffix;
+                std::error_code ec;
+                if (!std::filesystem::is_regular_file(path, ec))
+                    continue;
+                std::string mount;
+                const std::string location = LocationOf(path, &mount);
+                json << ",\"location\":\"" << location << "\",\"size\":" << Storage::FileSize(path)
+                     << ",\"inUse\":" << (IsPackInUse(path) ? "true" : "false");
+                break;
+            }
+            json << "}";
+        }
+        json << "]}";
+        res.set_content(json.str(), kJsonType);
+    });
+
+    server.Put("/api/origins/files/:name",
+               [this, originsFolders, knownFile](const httplib::Request &req, httplib::Response &res, const httplib::ContentReader &reader) {
+        const std::string name = req.path_params.at("name");
+        if (!knownFile(name))
+            return Fail(res, 404, name + " is not one of the Sonic Origins sound files this page takes.");
+        if (OriginsConversionRunning())
+            return Fail(res, 409, "Sonic Origins' audio is being converted. Upload when it has finished.");
+
+        std::uint64_t expected = 0;
+        if (!ContentLength(req, &expected) || expected < 16)
+            return Fail(res, 411, "The upload must state its size (Content-Length).");
+        if (expected > kMaxOriginsFileBytes)
+            return Fail(res, 413, "No Sonic Origins sound file is this big; refusing " + HumanBytes(expected) + ".");
+        Destination dest;
+        if (!ParseDestination(req, storage_, &dest, res))
+            return;
+        if (expected + dest.margin > dest.free) {
+            return Fail(res, 507,
+                        "Not enough space: this file needs " + HumanBytes(expected + dest.margin) + " (including a safety margin), "
+                            + HumanBytes(dest.free) + " is free.");
+        }
+
+        const std::string folder = (dest.usb ? RetroLibrary::UsbPackFolder(dest.drive.mountPoint) : retro_.TvPackFolder()) + "/" + kOriginsFolderName;
+        std::error_code ec;
+        std::filesystem::create_directories(folder, ec);
+        if (ec)
+            return Fail(res, 500, "Could not create " + folder + ": " + ec.message());
+
+        if (uploadInProgress_.exchange(true))
+            return Fail(res, 409, "Another upload is already running.");
+        const std::unique_ptr<std::atomic<bool>, void (*)(std::atomic<bool> *)> uploadGuard(
+            &uploadInProgress_, [](std::atomic<bool> *flag) { flag->store(false); });
+        {
+            std::lock_guard<std::mutex> lock(statusMutex_);
+            status_.uploading     = true;
+            status_.receivedBytes = 0;
+            status_.expectedBytes = expected;
+        }
+        PublishEvent("Receiving " + name + "...");
+
+        const std::string target   = folder + "/" + name;
+        const std::string partPath = target + ".part";
+        const std::int64_t written = StreamBodyToFile(reader, partPath, expected, [this](std::uint64_t total) {
+            std::lock_guard<std::mutex> lock(statusMutex_);
+            status_.receivedBytes = total;
+        });
+        {
+            std::lock_guard<std::mutex> lock(statusMutex_);
+            status_.uploading = false;
+        }
+        if (written < 0 || static_cast<std::uint64_t>(written) != expected) {
+            std::filesystem::remove(partPath, ec);
+            PublishEvent("Upload interrupted. Please try again.");
+            return Fail(res, 400, "The upload was interrupted or could not be written.");
+        }
+
+        // A CRIWARE file starts with "@UTF" (.acb) or "AFS2" (.awb).
+        char magic[4] = {};
+        {
+            std::ifstream in(partPath, std::ios::binary);
+            in.read(magic, sizeof(magic));
+        }
+        const bool awb = name.size() > 4 && name.compare(name.size() - 4, 4, ".awb") == 0;
+        if (std::memcmp(magic, awb ? "AFS2" : "@UTF", 4) != 0) {
+            std::filesystem::remove(partPath, ec);
+            PublishEvent("That file is not " + name + ".");
+            return Fail(res, 415, "That file is not Sonic Origins' " + name + ".");
+        }
+
+        std::filesystem::rename(partPath, target, ec);
+        if (ec) {
+            std::filesystem::remove(partPath, ec);
+            return Fail(res, 500, "Could not move the file into place.");
+        }
+        // One copy only: the engine takes the first it finds.
+        for (const std::string &other : originsFolders()) {
+            if (other != folder)
+                std::filesystem::remove(other + "/" + name, ec);
+        }
+        PublishEvent(name + " received.");
+        res.set_content("installed", kTextType);
+    });
+
+    server.Delete("/api/origins/files", [this, originsFolders](const httplib::Request &, httplib::Response &res) {
+        if (OriginsConversionRunning())
+            return Fail(res, 409, "Sonic Origins' audio is being converted. Remove the files when it has finished.");
+        std::uint64_t freed = 0;
+        int removed         = 0;
+        for (const std::string &folder : originsFolders()) {
+            for (const std::string &name : originsHooks_.fileNames) {
+                const std::string path   = folder + "/" + name;
+                const std::uint64_t size = Storage::FileSize(path);
+                std::error_code ec;
+                if (std::filesystem::remove(path, ec)) {
+                    freed += size;
+                    ++removed;
+                }
+            }
+            std::error_code ec;
+            std::filesystem::remove(folder, ec); // Only when empty.
+        }
+        PublishEvent("Removed Sonic Origins' sound files (" + HumanBytes(freed) + ").");
+        res.set_content("Removed " + std::to_string(removed) + " file(s), " + HumanBytes(freed) + " freed.", kTextType);
+    });
+
+    server.Post("/api/origins/convert", [this](const httplib::Request &, httplib::Response &res) {
+        if (!originsHooks_.start || setupMode_.load())
+            return Fail(res, 409, "The game must be running on the TV to convert (it does the work).");
+        if (uploadInProgress_.load())
+            return Fail(res, 409, "Wait for the upload to finish.");
+        if (!originsHooks_.start())
+            return Fail(res, 409, "A conversion is already running.");
+        PublishEvent("Converting Sonic Origins' audio...");
+        res.set_content("started", kTextType);
+    });
+
+    server.Delete("/api/origins/packs/:game", [this](const httplib::Request &req, httplib::Response &res) {
+        const RetroGameInfo *game = RetroLibrary::FindGame(req.path_params.at("game"));
+        if (!game)
+            return Fail(res, 404, "Unknown game.");
+        if (OriginsConversionRunning())
+            return Fail(res, 409, "Sonic Origins' audio is being converted. Try again when it has finished.");
+        const std::string fileName = std::string(game->id) + kOriginsPackSuffix;
+        for (const std::string &folder : retro_.PackFolders()) {
+            if (IsPackInUse(folder + "/" + fileName))
+                return Fail(res, 409, std::string(game->title) + "'s Sonic Origins audio is in use this session. It can be removed after a restart.");
+        }
+        int removed = 0;
+        for (const std::string &folder : retro_.PackFolders()) {
+            std::error_code ec;
+            if (std::filesystem::remove(folder + "/" + fileName, ec))
+                ++removed;
+        }
+        if (!removed)
+            return Fail(res, 404, "That game has no converted audio.");
+        NoteRestartNeeded();
+        PublishEvent(std::string(game->title) + ": Sonic Origins audio removed.");
         res.set_content("removed", kTextType);
     });
 }

@@ -2,7 +2,7 @@
 
 # SonicWebMania
 
-**Version 3.1.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+**Version 3.2.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
 and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations, through their Plus
 forks ([RSDKv5-Decompilation-Plus](https://github.com/pustal/RSDKv5-Decompilation-Plus) and
 [Sonic-Mania-Decompilation-Plus](https://github.com/pustal/Sonic-Mania-Decompilation-Plus)), built as a
@@ -19,7 +19,8 @@ forks ([RSDKv5-Decompilation-Plus](https://github.com/pustal/RSDKv5-Decompilatio
   game, Exit. It also shows the transfer page's address and PIN.
 - **Retro games.** The engine also plays Sonic the Hedgehog, Sonic 2 and Sonic CD from
   your own data packs: those of Sonic Origins and/or of the earlier releases, with save
-  slots, and Sonic Mania's music and sounds filling what the packs lack. The Plus menu's
+  slots, Sonic Origins' own music and sounds (uploaded from its files and converted on the
+  TV), and Sonic Mania's filling what is left. The Plus menu's
   Games page switches between them and Sonic Mania. See [Retro games](#retro-games).
 - **Achievements.** The game's 18 achievements unlock as you play (the engine records them
   in `Achievements.bin`, next to your saves). The menu lists them all, unlocked and locked,
@@ -52,7 +53,7 @@ These show the app's own screens and the Plus menu; none of them contain game gr
 
 | Transfer page: PIN | Transfer page: data, saves and settings |
 |---|---|
-| <img src="docs/images/web-pin.png" alt="Transfer page asking for the PIN" width="260"> | <img src="docs/images/web-page.png" alt="Transfer page with storage, Sonic Mania's pack, saves per game, retro game packs and settings" width="260"> |
+| <img src="docs/images/web-pin.png" alt="Transfer page asking for the PIN" width="260"> | <img src="docs/images/web-page.png" alt="Transfer page with storage, Sonic Mania's pack, saves per game, retro game packs, Sonic Origins audio, mods and settings" width="260"> |
 
 ## Remote control
 
@@ -91,6 +92,9 @@ the remote are held for at least a frame, so the game never misses a short press
 - The engine reopens a pack for every file it reads, and the Plus menu can switch to any
   game, so every pack found at launch counts as in use: replacing or moving one copies it
   now and switches at the next start (the page says so), and removing one waits until then.
+- **Sonic Origins audio**: upload Sonic Origins' sound files, convert them (the TV does
+  it, in the background; the page shows its progress), remove a game's converted audio,
+  and remove the uploaded files once converted.
 - **Clean up** removes what interrupted uploads, moves and Sonic CD conversions leave
   behind (`.part` and `.conv` files, on the TV and the drives). The app keeps no cache;
   files waiting for the next start are left alone.
@@ -121,10 +125,22 @@ How each game plays depends on what you upload:
 
 | Packs | Result |
 |---|---|
+| Origins + Sonic Origins audio | The Origins game with Sonic Origins' own music and sounds (see **Sonic Origins' audio** below); the earlier release's pack and Sonic Mania fill any gaps |
 | Origins + earlier release | The Origins game, with the earlier release's music and sound effects. The sounds Origins added (Drop Dash, Knuckles' and Amy's moves) come from Sonic Mania when it is installed, otherwise they are silent |
-| Origins only | The Origins game. Origins keeps its audio outside these packs, so without Sonic Mania it is silent; with it, see **Sound from Sonic Mania** below |
+| Origins only | The Origins game. Origins keeps its audio outside these packs, so without Sonic Origins' audio or Sonic Mania it is silent |
 | Earlier release only | Sonic 1 and 2: that release. Sonic CD: the mobile pack is the 2011 game, with its own menus, save slots and Time Attack. The Steam pack can't be played alone (its scripts are stored the way the PC build named them, which the engine doesn't load); it only adds sound to the Origins game |
 
+- **Sonic Origins' audio.** Sonic Origins plays the games' music and sounds from files of
+  its own, not from its packs. On the transfer page, **Sonic Origins audio** takes them from
+  its `image/x64/raw/sound` folder (choose them all at once; the page keeps the ones it
+  needs: `HITE_sfx.acb`, and `STH1`, `STH2`, `SCD` `_sfx.acb`, `_music.acb`, `_music.awb`,
+  about 380 MB in all) and **Convert** has the TV write one pack per game,
+  `<game>-origins-audio.rsdk` (about 30, 70 and 250 MB), next to the files (on the TV or the
+  drive, as "Store packs and mods on" says). The Plus menu's Settings can convert too. A
+  retro game being played restarts when it is done; the uploaded files can then be
+  removed. Music loops at Origins' own loop points and the speed shoes play the zone's
+  track faster, as in Origins. Sounds then come from Sonic Origins first, then from the
+  earlier release's pack, then from Sonic Mania's.
 - **Sound from Sonic Mania.** With Sonic Mania's `Data.rsdk` installed, whatever music or
   sound effect a retro game's packs lack comes from Mania's pack (on by default; a
   checkbox on the page turns it off). The game's own packs always win.
@@ -231,6 +247,7 @@ prints these figures every time):
 | Installed app (binary + bundled SDL2) | ~5 MiB |
 | Your `Data.rsdk` | the size of your file |
 | Retro game packs (optional, on the TV or a USB drive) | Origins 17-35 MiB each; earlier releases 43-75 MiB each |
+| Sonic Origins' audio (optional) | the uploaded files ~380 MiB (removable once converted); converted packs ~30, 66 and 240 MiB |
 | Saves and settings | well under 1 MiB (time-attack replays add a little) |
 | Headroom required during an upload | 32 MiB, on top of the file being uploaded |
 
