@@ -117,7 +117,9 @@
         them here and the TV converts them: Sonic 1, 2 and CD then play Sonic Origins' own music and sounds, with the
         earlier release's pack and Sonic Mania filling any gaps. They are in Sonic Origins' <code>image/x64/raw/sound</code>
         folder (on Steam: right-click Sonic Origins, Manage, Browse local files). Choose all of them at once; the page
-        takes the ones listed below. They go where "Store packs and mods on" says.</p>
+        takes the ones listed below. The converted packs are written next to them.</p>
+      <p>Upload them to: <select id="origins-dest"></select></p>
+      <p id="origins-dest-line" class="dim"></p>
       <label class="button" for="origins-files">Upload the files</label>
       <input id="origins-files" type="file" multiple accept=".acb,.awb">
       <button id="origins-convert" type="button" disabled>Convert</button>
@@ -326,8 +328,10 @@ function packDestination() {
 }
 
 /** Free bytes and safety margin of the chosen storage. */
-function packSpace() {
-  const dest = packDestination();
+function packSpace() { return spaceAt(packDestination()); }
+
+/** @param {string} dest "tv" or a USB mount point @returns {{ free: number, margin: number }} free bytes and safety margin there */
+function spaceAt(dest) {
   if (!lastRetro) return { free: 0, margin: 0 };
   if (dest === 'tv') return { free: lastRetro.tv.freeBytes, margin: lastRetro.tv.safetyMarginBytes };
   const drive = lastRetro.drives.find((d) => d.mount === dest);
@@ -460,6 +464,7 @@ function renderPackDestinations() {
   const drive = lastRetro.drives.find((d) => d.mount === select.value);
   byId('pack-folder').classList.toggle('hidden', !drive || drive.hasFolder);
   renderManiaPack();
+  renderOriginsDestinations();
   byId('pack-dest-line').textContent = drive
     ? 'On the drive, Sonic Mania\'s Data.rsdk goes in the SonicWebMania folder, the retro packs in SonicWebMania/retro'
       + ', Sonic Origins\' sound files in SonicWebMania/retro/origins and mods in SonicWebMania/mods'
@@ -1082,6 +1087,36 @@ async function uploadMods(files) {
 // Sonic Origins audio
 // ---------------------
 
+/** The storage chosen for Sonic Origins' files: "tv" or a USB mount point. */
+function originsDestination() {
+  return /** @type {HTMLSelectElement} */ (byId('origins-dest')).value || 'tv';
+}
+
+/**
+ * Fills the Sonic Origins storage list (the TV and each writable drive), keeping the
+ * current choice; until one is made it follows "Store packs and mods on".
+ */
+function renderOriginsDestinations() {
+  if (!lastRetro) return;
+  const select = /** @type {HTMLSelectElement} */ (byId('origins-dest'));
+  const previous = select.dataset.chosen === '1' ? select.value : packDestination();
+  select.replaceChildren();
+  for (const drive of lastRetro.drives.filter((d) => d.writable)) {
+    const option = document.createElement('option');
+    option.value = drive.mount;
+    option.textContent = 'USB ' + drive.name + ' (' + humanBytes(drive.freeBytes) + ' free)';
+    select.append(option);
+  }
+  const tv = document.createElement('option');
+  tv.value = 'tv';
+  tv.textContent = 'The TV (' + humanBytes(lastRetro.tv.freeBytes) + ' free)';
+  select.append(tv);
+  select.value = Array.from(select.options).some((o) => o.value === previous) ? previous : select.options[0].value;
+  byId('origins-dest-line').textContent = select.value === 'tv'
+    ? 'In the app\'s storage on the TV (retro/origins). The files are about 380 MB and the converted packs about 340 MB: a USB drive spares the TV\'s space.'
+    : 'On the drive, in SonicWebMania/retro/origins (created with the first upload).';
+}
+
 /** @param {string} text @param {string} [kind] '', 'ok' or 'warn' */
 function originsSay(text, kind = '') {
   const message = byId('origins-message');
@@ -1180,7 +1215,8 @@ async function uploadOriginsFiles(files) {
     return;
   }
   const total = chosen.reduce((sum, f) => sum + f.size, 0);
-  const space = packSpace();
+  const dest = originsDestination();
+  const space = spaceAt(dest);
   if (total + space.margin > space.free) {
     originsSay('Not enough space there: needs ' + humanBytes(total + space.margin) + ', ' + humanBytes(space.free) + ' free.', 'warn');
     return;
@@ -1190,7 +1226,7 @@ async function uploadOriginsFiles(files) {
   const progress = /** @type {HTMLProgressElement} */ (byId('origins-progress'));
   progress.classList.remove('hidden');
   progress.value = 0;
-  const query = destinationQuery(packDestination());
+  const query = destinationQuery(dest);
   let sent = 0;
   const problems = [];
   for (const file of chosen) {
@@ -1231,6 +1267,11 @@ byId('origins-files').addEventListener('change', (event) => {
   const files = input.files ? Array.from(input.files) : [];
   if (files.length > 0) uploadOriginsFiles(files).catch((error) => originsSay(String(error), 'warn'));
   input.value = '';
+});
+
+byId('origins-dest').addEventListener('change', () => {
+  byId('origins-dest').dataset.chosen = '1'; // From now on the list keeps this choice.
+  renderOriginsDestinations();
 });
 
 byId('origins-convert').addEventListener('click', () => { convertOrigins().catch(() => undefined); });

@@ -135,8 +135,8 @@ How each game plays depends on what you upload:
   its `image/x64/raw/sound` folder (choose them all at once; the page keeps the ones it
   needs: `HITE_sfx.acb`, and `STH1`, `STH2`, `SCD` `_sfx.acb`, `_music.acb`, `_music.awb`,
   about 380 MB in all) and **Convert** has the TV write one pack per game,
-  `<game>-origins-audio.rsdk` (about 30, 70 and 250 MB), next to the files (on the TV or the
-  drive, as "Store packs and mods on" says). The Plus menu's Settings can convert too. A
+  `<game>-origins-audio.rsdk` (about 30, 70 and 250 MB), next to the files (the section has its own choice of the TV or a USB drive, which
+  starts as "Store packs and mods on"). The Plus menu's Settings can convert too. A
   retro game being played restarts when it is done; the uploaded files can then be
   removed. Music loops at Origins' own loop points and the speed shoes play the zone's
   track faster, as in Origins. Sounds then come from Sonic Origins first, then from the
