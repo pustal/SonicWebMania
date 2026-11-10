@@ -14,9 +14,10 @@
  * on the engine's thread). The remote's buttons are mapped by PortRuntime.
  * Mods (the engine's mod loader) are managed on the page; before the engine
  * starts, staged mod changes are applied and the USB drives' mods linked in
- * (see port/ModLibrary.h). Sonic Origins' sound files are uploaded on the
- * page too, and converted by the engine when the page asks (its Plus module,
- * RSDK::Plus::StartOriginsAudioConversion()).
+ * (see port/ModLibrary.h). Sonic Origins' sound and video files are uploaded
+ * on the page too, and converted by the engine when the page asks (its Plus
+ * module, RSDK::Plus::StartOriginsAudioConversion() and
+ * StartOriginsVideoConversion()).
  *
  * Replaces RSDKv5/main.cpp from the engine (excluded in cmake/RSDKPlatform-webOS.cmake).
  */
@@ -116,6 +117,16 @@ RSDK::Plus::Settings ToPlusSettings(const swm::GameSettings &settings)
     return converted;
 }
 
+/** A Sonic Origins conversion's state as the engine gives it, for the page. */
+swm::OriginsState ToOriginsState(const RSDK::Plus::OriginsAudioStatus &status)
+{
+    swm::OriginsState state;
+    state.running = status.running;
+    state.percent = status.percent;
+    state.message = status.message;
+    return state;
+}
+
 /** What the engine's callbacks (plain function pointers) reach. */
 struct Session {
     swm::SettingsChannel *settings = nullptr;
@@ -123,13 +134,13 @@ struct Session {
     const swm::RetroLibrary *retro = nullptr;
     std::string maniaPack;                  ///< Sonic Mania's pack this session ("" without it).
     bool restartRequested  = false;         ///< "Restart game" was chosen in the Plus menu.
-    bool originsConverting = false;         ///< A Sonic Origins audio conversion was running last frame.
+    bool originsConverting = false;         ///< A Sonic Origins conversion (audio or videos) was running last frame.
 };
 Session session;
 
 /**
  * Every pack the engine may read this session (see TransferServer::SetPacksInUse()):
- * Sonic Mania's, the retro games' and their converted Sonic Origins audio.
+ * Sonic Mania's, the retro games' and their converted Sonic Origins audio and videos.
  */
 std::vector<std::string> PacksInUse(const std::string &maniaPack, const swm::RetroLibrary &retro)
 {
@@ -144,9 +155,11 @@ std::vector<std::string> PacksInUse(const std::string &maniaPack, const swm::Ret
     }
     for (const std::string &folder : retro.PackFolders()) {
         for (const swm::RetroGameInfo &game : swm::RetroCatalogue()) {
-            const std::string path = folder + "/" + game.id + swm::TransferServer::kOriginsPackSuffix;
-            if (swm::Storage::FileSize(path) > 0)
-                packs.push_back(path);
+            for (const char *suffix : { swm::TransferServer::kOriginsPackSuffix, swm::TransferServer::kOriginsVideoPackSuffix }) {
+                const std::string path = folder + "/" + game.id + suffix;
+                if (swm::Storage::FileSize(path) > 0)
+                    packs.push_back(path);
+            }
         }
     }
     return packs;
@@ -166,8 +179,8 @@ void OnEngineFrame()
         RSDK::Plus::ApplySettings(ToPlusSettings(requested));
     session.settings->Publish(ToGameSettings(RSDK::Plus::CurrentSettings()));
 
-    // A conversion wrote new audio packs, which the engine now reads: the page must leave them alone.
-    const bool converting = RSDK::Plus::GetOriginsAudioStatus().running;
+    // A conversion wrote new packs, which the engine now reads: the page must leave them alone.
+    const bool converting = RSDK::Plus::GetOriginsAudioStatus().running || RSDK::Plus::GetOriginsVideoStatus().running;
     if (session.originsConverting && !converting && session.server)
         session.server->SetPacksInUse(PacksInUse(session.maniaPack, *session.retro));
     session.originsConverting = converting;
@@ -200,11 +213,13 @@ void ConfigurePlus(const swm::RetroLibrary &retro, const swm::TransferServer *se
         texts.packHint         = "Add retro packs from the transfer page on a phone or computer: " + page
                          + ". Then choose Restart game.";
         texts.originsAudioHint = "Upload them on the transfer page (" + page + "), then press OK here or Convert there.";
+        texts.originsVideoHint = texts.originsAudioHint;
     }
     else {
         texts.menuInfo         = "Connect the TV to a network to reach the transfer page.";
         texts.packHint         = "Add retro packs from the transfer page (the TV must be on a network), then choose Restart game.";
         texts.originsAudioHint = "Upload them on the transfer page (the TV must be on a network), then press OK here.";
+        texts.originsVideoHint = texts.originsAudioHint;
     }
     RSDK::Plus::SetPlatformTexts(texts);
     RSDK::Plus::AddMenuAction("Restart game", &RequestRestart);
@@ -248,18 +263,17 @@ int32 main(int32 argc, char *argv[])
     swm::SettingsChannel settings(swm::ReadSavedSettings(storage));
     session.settings = &settings;
     swm::TransferServer server(storage, settings, retro, mods, swm::GeneratePin());
-    swm::OriginsAudioHooks origins;
-    origins.fileNames.assign(std::begin(RSDK::Plus::kOriginsAudioFileNames), std::end(RSDK::Plus::kOriginsAudioFileNames));
-    origins.start  = [] { return RSDK::Plus::StartOriginsAudioConversion() != 0; };
-    origins.status = [] {
-        const RSDK::Plus::OriginsAudioStatus status = RSDK::Plus::GetOriginsAudioStatus();
-        swm::OriginsAudioState state;
-        state.running = status.running;
-        state.percent = status.percent;
-        state.message = status.message;
-        return state;
-    };
-    server.SetOriginsAudioHooks(std::move(origins));
+    swm::OriginsHooks audio, video;
+    audio.fileNames.assign(std::begin(RSDK::Plus::kOriginsAudioFileNames), std::end(RSDK::Plus::kOriginsAudioFileNames));
+    audio.packSuffix = swm::TransferServer::kOriginsPackSuffix;
+    audio.start      = [] { return RSDK::Plus::StartOriginsAudioConversion() != 0; };
+    audio.status     = [] { return ToOriginsState(RSDK::Plus::GetOriginsAudioStatus()); };
+    video.fileNames.assign(std::begin(RSDK::Plus::kOriginsVideoFileNames), std::end(RSDK::Plus::kOriginsVideoFileNames));
+    video.packSuffix  = swm::TransferServer::kOriginsVideoPackSuffix;
+    video.convertible = RSDK::Plus::OriginsVideoConversionAvailable() != 0;
+    video.start       = [] { return RSDK::Plus::StartOriginsVideoConversion() != 0; };
+    video.status      = [] { return ToOriginsState(RSDK::Plus::GetOriginsVideoStatus()); };
+    server.SetOriginsHooks(std::move(audio), std::move(video));
     session.server = &server;
     session.retro  = &retro;
     const bool serverRunning = server.Start();

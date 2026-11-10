@@ -132,6 +132,29 @@
         played restarts when it is done. Afterwards the uploaded files are not needed: remove them to free the space.</p>
     </section>
 
+    <section id="videos-section">
+      <h2>Sonic Origins videos</h2>
+      <p class="dim">Sonic CD's opening and endings, and the animated intro and outro Sonic Origins plays for each game,
+        with its Sonic Team logo. Upload them and the TV converts them into videos the engine plays: Sonic CD shows its
+        own when its scripts call for them, and the intro plays when a new game starts, the outro before the credits
+        after the ending and the logo before the title screen. They are the <code>.usm</code> files in Sonic Origins'
+        <code>image/x64/raw/movie</code> folder: the ones listed below, not the <code>_4k</code> or <code>_anim</code>
+        copies. Choose them all at once; the page takes the ones it needs.</p>
+      <p>Upload them to: <select id="videos-dest"></select></p>
+      <p id="videos-dest-line" class="dim"></p>
+      <label class="button" for="videos-files">Upload the files</label>
+      <input id="videos-files" type="file" multiple accept=".usm">
+      <button id="videos-convert" type="button" disabled>Convert</button>
+      <progress id="videos-progress" class="hidden" max="100" value="0"></progress>
+      <p id="videos-message"></p>
+      <div id="videos-files-list"></div>
+      <div id="videos-packs"></div>
+      <p><button id="videos-remove-files" class="secondary hidden" type="button">Remove the uploaded files</button></p>
+      <p class="dim">Every frame of the videos is decoded and encoded again, which takes the TV a long while (an hour or
+        more; you can play meanwhile, a little slower). A retro game being played restarts when it is done. Afterwards the
+        uploaded files are not needed: remove them to free the space.</p>
+    </section>
+
     <section id="mods-section">
       <h2>Mods</h2>
       <p class="dim">Mods for the engine's mod loader: a folder with a <code>mod.ini</code> and the game files it changes.
@@ -192,8 +215,8 @@
  * @typedef {{ folder: string, files: { file: File, path: string }[], bytes: number }} ModUpload
  * @typedef {{ name: string, location?: 'tv'|'usb', mount?: string, size?: number }} OriginsFile
  * @typedef {{ game: string, title: string, location?: 'tv'|'usb', size?: number, inUse?: boolean }} OriginsPack
- * @typedef {{ available: boolean, running: boolean, percent: number, message: string, files: OriginsFile[],
- *             packs: OriginsPack[] }} OriginsState
+ * @typedef {{ available: boolean, convertible: boolean, running: boolean, percent: number, message: string,
+ *             files: OriginsFile[], packs: OriginsPack[] }} OriginsState
  */
 
 /** Session-only so the PIN is forgotten when the tab closes. */
@@ -229,12 +252,6 @@ let modRemoveArmed = '';
 const MAX_MOD_FILE_BYTES = 256 * 1024 * 1024;
 /** Mod files sent at the same time (the TV serves two requests at once). */
 const PARALLEL_MOD_UPLOADS = 2;
-/** @type {OriginsState | null} */
-let lastOrigins = null;
-/** Polls the conversion while it runs. */
-let originsPoll = 0;
-/** Which game each Sonic Origins file is for, shown next to it. */
-const ORIGINS_FILE_GAMES = { HITE: 'all three games', STH1: 'Sonic 1 (and three of Sonic 2\'s jingles)', STH2: 'Sonic 2', SCD: 'Sonic CD' };
 
 /** The retro games' ids, from the last file listing (for the download-name prefix). */
 let retroGameIds = /** @type {string[]} */ ([]);
@@ -467,7 +484,7 @@ function renderPackDestinations() {
   renderOriginsDestinations();
   byId('pack-dest-line').textContent = drive
     ? 'On the drive, Sonic Mania\'s Data.rsdk goes in the SonicWebMania folder, the retro packs in SonicWebMania/retro'
-      + ', Sonic Origins\' sound files in SonicWebMania/retro/origins and mods in SonicWebMania/mods'
+      + ', Sonic Origins\' files in SonicWebMania/retro/origins and mods in SonicWebMania/mods'
       + (drive.hasFolder ? '.' : ' (created with the first upload).')
     : 'Packs go in the app\'s storage on the TV. A USB drive saves the TV\'s space.';
 }
@@ -1084,51 +1101,89 @@ async function uploadMods(files) {
 
 
 // ---------------------
-// Sonic Origins audio
+// Sonic Origins audio and videos
 // ---------------------
 
-/** The storage chosen for Sonic Origins' files: "tv" or a USB mount point. */
-function originsDestination() {
-  return /** @type {HTMLSelectElement} */ (byId('origins-dest')).value || 'tv';
+/**
+ * The two Sonic Origins sections, which work the same way: upload files from
+ * one of its folders, have the TV convert them, manage what it wrote.
+ * @typedef {'audio'|'videos'} OriginsKind
+ */
+const ORIGINS_SECTIONS = {
+  audio: {
+    prefix: 'origins',
+    folder: 'image/x64/raw/sound',
+    accept: '.acb,.awb',
+    converted: 'Sonic Origins audio',
+    sizes: 'The files are about 380 MB and the converted packs about 340 MB',
+    /** @param {string} name @returns {string} */
+    game: (name) => ({ HITE: 'all three games', STH1: 'Sonic 1 (and three of Sonic 2\'s jingles)', STH2: 'Sonic 2', SCD: 'Sonic CD' })[name.split('_')[0]] || '',
+  },
+  videos: {
+    prefix: 'videos',
+    folder: 'image/x64/raw/movie',
+    accept: '.usm',
+    converted: 'Sonic Origins videos',
+    sizes: 'The files are about 360 MB and the converted packs about 120 MB',
+    /** @param {string} name @returns {string} */
+    game: (name) => name.startsWith('sonicteam') ? 'all three games (the Sonic Team logo)'
+      : name.includes('sonic1') ? 'Sonic 1' : name.includes('sonic2') ? 'Sonic 2' : 'Sonic CD',
+  },
+};
+/** @type {Record<OriginsKind, OriginsState | null>} */
+const lastOrigins = { audio: null, videos: null };
+/** Polls a running conversion. @type {Record<OriginsKind, number>} */
+const originsPoll = { audio: 0, videos: 0 };
+
+/** @param {OriginsKind} kind @param {string} id @returns {HTMLElement} the section's element "<prefix>-<id>" */
+function originsElement(kind, id) { return byId(ORIGINS_SECTIONS[kind].prefix + '-' + id); }
+
+/** @param {OriginsKind} kind @returns {string} the storage chosen in the section: "tv" or a USB mount point */
+function originsDestination(kind) {
+  return /** @type {HTMLSelectElement} */ (originsElement(kind, 'dest')).value || 'tv';
 }
 
 /**
- * Fills the Sonic Origins storage list (the TV and each writable drive), keeping the
- * current choice; until one is made it follows "Store packs and mods on".
+ * Fills a section's storage list (the TV and each writable drive), keeping its
+ * choice; until one is made it follows "Store packs and mods on".
  */
 function renderOriginsDestinations() {
   if (!lastRetro) return;
-  const select = /** @type {HTMLSelectElement} */ (byId('origins-dest'));
-  const previous = select.dataset.chosen === '1' ? select.value : packDestination();
-  select.replaceChildren();
-  for (const drive of lastRetro.drives.filter((d) => d.writable)) {
-    const option = document.createElement('option');
-    option.value = drive.mount;
-    option.textContent = 'USB ' + drive.name + ' (' + humanBytes(drive.freeBytes) + ' free)';
-    select.append(option);
+  for (const kind of /** @type {OriginsKind[]} */ (['audio', 'videos'])) {
+    const select = /** @type {HTMLSelectElement} */ (originsElement(kind, 'dest'));
+    const previous = select.dataset.chosen === '1' ? select.value : packDestination();
+    select.replaceChildren();
+    for (const drive of lastRetro.drives.filter((d) => d.writable)) {
+      const option = document.createElement('option');
+      option.value = drive.mount;
+      option.textContent = 'USB ' + drive.name + ' (' + humanBytes(drive.freeBytes) + ' free)';
+      select.append(option);
+    }
+    const tv = document.createElement('option');
+    tv.value = 'tv';
+    tv.textContent = 'The TV (' + humanBytes(lastRetro.tv.freeBytes) + ' free)';
+    select.append(tv);
+    select.value = Array.from(select.options).some((o) => o.value === previous) ? previous : select.options[0].value;
+    originsElement(kind, 'dest-line').textContent = select.value === 'tv'
+      ? 'In the app\'s storage on the TV (retro/origins). ' + ORIGINS_SECTIONS[kind].sizes + ': a USB drive spares the TV\'s space.'
+      : 'On the drive, in SonicWebMania/retro/origins (created with the first upload).';
   }
-  const tv = document.createElement('option');
-  tv.value = 'tv';
-  tv.textContent = 'The TV (' + humanBytes(lastRetro.tv.freeBytes) + ' free)';
-  select.append(tv);
-  select.value = Array.from(select.options).some((o) => o.value === previous) ? previous : select.options[0].value;
-  byId('origins-dest-line').textContent = select.value === 'tv'
-    ? 'In the app\'s storage on the TV (retro/origins). The files are about 380 MB and the converted packs about 340 MB: a USB drive spares the TV\'s space.'
-    : 'On the drive, in SonicWebMania/retro/origins (created with the first upload).';
 }
 
-/** @param {string} text @param {string} [kind] '', 'ok' or 'warn' */
-function originsSay(text, kind = '') {
-  const message = byId('origins-message');
+/** @param {OriginsKind} kind @param {string} text @param {string} [tone] '', 'ok' or 'warn' */
+function originsSay(kind, text, tone = '') {
+  const message = originsElement(kind, 'message');
   message.textContent = text;
-  message.className = kind;
+  message.className = tone;
 }
 
-async function refreshOrigins() {
-  const state = /** @type {OriginsState} */ (await (await api('/api/origins')).json());
-  lastOrigins = state;
+/** @param {OriginsKind} kind */
+async function refreshOrigins(kind) {
+  const state = /** @type {OriginsState} */ (await (await api('/api/origins/' + kind)).json());
+  lastOrigins[kind] = state;
+  const section = ORIGINS_SECTIONS[kind];
 
-  const list = byId('origins-files-list');
+  const list = originsElement(kind, 'files-list');
   list.replaceChildren();
   const table = document.createElement('table');
   const body = document.createElement('tbody');
@@ -1138,7 +1193,7 @@ async function refreshOrigins() {
     name.textContent = file.name;
     const game = document.createElement('td');
     game.className = 'dim';
-    game.textContent = ORIGINS_FILE_GAMES[file.name.split('_')[0]] || '';
+    game.textContent = section.game(file.name);
     const where = document.createElement('td');
     where.className = file.location ? 'ok' : 'dim';
     where.textContent = file.location
@@ -1150,7 +1205,7 @@ async function refreshOrigins() {
   table.append(body);
   list.append(table);
 
-  const packs = byId('origins-packs');
+  const packs = originsElement(kind, 'packs');
   packs.replaceChildren();
   for (const pack of state.packs) {
     const row = document.createElement('div');
@@ -1170,69 +1225,74 @@ async function refreshOrigins() {
       remove.type = 'button';
       remove.className = 'secondary';
       remove.textContent = 'Remove';
-      remove.addEventListener('click', () => removeOriginsPack(pack).catch(() => undefined));
+      remove.addEventListener('click', () => removeOriginsPack(kind, pack).catch(() => undefined));
       row.append(remove);
     }
     packs.append(row);
   }
 
   const uploaded = state.files.filter((f) => f.location);
-  const convert = /** @type {HTMLButtonElement} */ (byId('origins-convert'));
-  convert.disabled = !state.available || state.running || packBusy || !uploaded.some((f) => f.name.endsWith('.acb'));
-  convert.title = state.available ? '' : 'The game must be running on the TV.';
-  byId('origins-remove-files').classList.toggle('hidden', uploaded.length === 0 || state.running);
+  const convert = /** @type {HTMLButtonElement} */ (originsElement(kind, 'convert'));
+  convert.disabled = !state.available || state.running || packBusy || uploaded.length === 0;
+  convert.title = !state.convertible ? 'This build of the app cannot convert them.'
+    : state.available ? '' : 'The game must be running on the TV.';
+  originsElement(kind, 'remove-files').classList.toggle('hidden', uploaded.length === 0 || state.running);
 
-  const progress = /** @type {HTMLProgressElement} */ (byId('origins-progress'));
+  const progress = /** @type {HTMLProgressElement} */ (originsElement(kind, 'progress'));
   progress.classList.toggle('hidden', !state.running);
   progress.value = state.percent;
   if (state.running) {
-    originsSay(state.message + ' ' + state.percent + '%');
-    if (!originsPoll) originsPoll = setInterval(() => refreshOrigins().catch(() => undefined), 1000);
-  } else if (originsPoll) {
-    clearInterval(originsPoll);
-    originsPoll = 0;
-    originsSay(state.message, state.message.includes('Failed') || state.message.startsWith('No files') ? 'warn' : 'ok');
+    originsSay(kind, state.message + ' ' + state.percent + '%');
+    if (!originsPoll[kind]) originsPoll[kind] = setInterval(() => refreshOrigins(kind).catch(() => undefined), 1000);
+  } else if (originsPoll[kind]) {
+    clearInterval(originsPoll[kind]);
+    originsPoll[kind] = 0;
+    originsSay(kind, state.message, state.message.includes('Failed') || state.message.startsWith('No ') ? 'warn' : 'ok');
     refreshCleanup().catch(() => undefined);
   }
 }
 
+/** Refreshes both sections. */
+function refreshAllOrigins() { return Promise.all([refreshOrigins('audio'), refreshOrigins('videos')]); }
+
 /**
- * Uploads the Sonic Origins files among @p files (one at a time), skipping the others.
- * @param {File[]} files
+ * Uploads the section's files among @p files (one at a time), skipping the others.
+ * @param {OriginsKind} kind @param {File[]} files
  */
-async function uploadOriginsFiles(files) {
-  if (!lastOrigins) return;
+async function uploadOriginsFiles(kind, files) {
+  const state = lastOrigins[kind];
+  if (!state) return;
   if (packBusy) {
-    originsSay('Wait for the current upload or move to finish.', 'warn');
+    originsSay(kind, 'Wait for the current upload or move to finish.', 'warn');
     return;
   }
   // Names as the TV expects them, whatever case the computer gave them.
-  const wanted = new Map(lastOrigins.files.map((f) => [f.name.toLowerCase(), f.name]));
+  const wanted = new Map(state.files.map((f) => [f.name.toLowerCase(), f.name]));
   const chosen = files.filter((f) => wanted.has(f.name.toLowerCase()));
   const skipped = files.length - chosen.length;
   if (chosen.length === 0) {
-    originsSay('None of those are the files listed below (from Sonic Origins\' image/x64/raw/sound folder).', 'warn');
+    originsSay(kind, 'None of those are the files listed below (from Sonic Origins\' ' + ORIGINS_SECTIONS[kind].folder + ' folder).', 'warn');
     return;
   }
   const total = chosen.reduce((sum, f) => sum + f.size, 0);
-  const dest = originsDestination();
+  const dest = originsDestination(kind);
   const space = spaceAt(dest);
   if (total + space.margin > space.free) {
-    originsSay('Not enough space there: needs ' + humanBytes(total + space.margin) + ', ' + humanBytes(space.free) + ' free.', 'warn');
+    originsSay(kind, 'Not enough space there: needs ' + humanBytes(total + space.margin) + ', ' + humanBytes(space.free) + ' free.', 'warn');
     return;
   }
 
   packBusy = true;
-  const progress = /** @type {HTMLProgressElement} */ (byId('origins-progress'));
+  const progress = /** @type {HTMLProgressElement} */ (originsElement(kind, 'progress'));
   progress.classList.remove('hidden');
   progress.value = 0;
   const query = destinationQuery(dest);
   let sent = 0;
   const problems = [];
   for (const file of chosen) {
-    originsSay('Uploading ' + file.name + ' (' + humanBytes(file.size) + ')... keep this page open.');
+    originsSay(kind, 'Uploading ' + file.name + ' (' + humanBytes(file.size) + ')... keep this page open.');
     const name = /** @type {string} */ (wanted.get(file.name.toLowerCase()));
-    const result = await putWithProgress('/api/origins/files/' + encodeURIComponent(name) + '?' + query, file,
+    const result = await putWithProgress('/api/origins/' + kind + '/files/' + encodeURIComponent(name) + '?' + query, file,
       (fraction) => { progress.value = Math.floor(((sent + fraction * file.size) / total) * 100); });
     if (!result.ok) problems.push(name + ': ' + result.text);
     sent += file.size;
@@ -1240,47 +1300,48 @@ async function uploadOriginsFiles(files) {
   packBusy = false;
   progress.classList.add('hidden');
   const note = skipped ? ' Skipped ' + skipped + ' other file(s).' : '';
-  if (problems.length) originsSay(problems.join(' ') + note, 'warn');
-  else originsSay('Uploaded ' + chosen.length + ' file(s).' + note + ' Press Convert when they are all there.', 'ok');
-  await Promise.all([refreshOrigins(), refreshStatus(), refreshRetro()]);
+  if (problems.length) originsSay(kind, problems.join(' ') + note, 'warn');
+  else originsSay(kind, 'Uploaded ' + chosen.length + ' file(s).' + note + ' Press Convert when they are all there.', 'ok');
+  await Promise.all([refreshAllOrigins(), refreshStatus(), refreshRetro()]);
 }
 
-async function convertOrigins() {
-  const response = await api('/api/origins/convert', { method: 'POST' });
+/** @param {OriginsKind} kind */
+async function convertOrigins(kind) {
+  const response = await api('/api/origins/' + kind + '/convert', { method: 'POST' });
   if (!response.ok) {
-    originsSay(await response.text(), 'warn');
+    originsSay(kind, await response.text(), 'warn');
     return;
   }
-  originsSay('Converting on the TV...');
-  await refreshOrigins();
+  originsSay(kind, 'Converting on the TV...');
+  await refreshOrigins(kind);
 }
 
-/** @param {OriginsPack} pack */
-async function removeOriginsPack(pack) {
-  const response = await api('/api/origins/packs/' + pack.game, { method: 'DELETE' });
-  originsSay(response.ok ? pack.title + ': Sonic Origins audio removed.' : await response.text(), response.ok ? '' : 'warn');
-  await Promise.all([refreshOrigins(), refreshStatus()]);
+/** @param {OriginsKind} kind @param {OriginsPack} pack */
+async function removeOriginsPack(kind, pack) {
+  const response = await api('/api/origins/' + kind + '/packs/' + pack.game, { method: 'DELETE' });
+  originsSay(kind, response.ok ? pack.title + ': ' + ORIGINS_SECTIONS[kind].converted + ' removed.' : await response.text(),
+    response.ok ? '' : 'warn');
+  await Promise.all([refreshOrigins(kind), refreshStatus()]);
 }
 
-byId('origins-files').addEventListener('change', (event) => {
-  const input = /** @type {HTMLInputElement} */ (event.target);
-  const files = input.files ? Array.from(input.files) : [];
-  if (files.length > 0) uploadOriginsFiles(files).catch((error) => originsSay(String(error), 'warn'));
-  input.value = '';
-});
-
-byId('origins-dest').addEventListener('change', () => {
-  byId('origins-dest').dataset.chosen = '1'; // From now on the list keeps this choice.
-  renderOriginsDestinations();
-});
-
-byId('origins-convert').addEventListener('click', () => { convertOrigins().catch(() => undefined); });
-
-byId('origins-remove-files').addEventListener('click', async () => {
-  const response = await api('/api/origins/files', { method: 'DELETE' });
-  originsSay(await response.text(), response.ok ? 'ok' : 'warn');
-  await Promise.all([refreshOrigins(), refreshStatus(), refreshRetro()]);
-});
+for (const kind of /** @type {OriginsKind[]} */ (['audio', 'videos'])) {
+  originsElement(kind, 'files').addEventListener('change', (event) => {
+    const input = /** @type {HTMLInputElement} */ (event.target);
+    const files = input.files ? Array.from(input.files) : [];
+    if (files.length > 0) uploadOriginsFiles(kind, files).catch((error) => originsSay(kind, String(error), 'warn'));
+    input.value = '';
+  });
+  originsElement(kind, 'dest').addEventListener('change', () => {
+    originsElement(kind, 'dest').dataset.chosen = '1'; // From now on the list keeps this choice.
+    renderOriginsDestinations();
+  });
+  originsElement(kind, 'convert').addEventListener('click', () => { convertOrigins(kind).catch(() => undefined); });
+  originsElement(kind, 'remove-files').addEventListener('click', async () => {
+    const response = await api('/api/origins/' + kind + '/files', { method: 'DELETE' });
+    originsSay(kind, await response.text(), response.ok ? 'ok' : 'warn');
+    await Promise.all([refreshOrigins(kind), refreshStatus(), refreshRetro()]);
+  });
+}
 
 byId('pin-form').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -1288,7 +1349,7 @@ byId('pin-form').addEventListener('submit', async (event) => {
   sessionStorage.setItem(PIN_KEY, input.value.trim());
   try {
     await Promise.all([refreshStatus(), refreshFiles(), refreshRetro(), refreshCleanup()]);
-    await Promise.all([refreshMods(), refreshOrigins()]); // After the drives (refreshRetro), which name where each is.
+    await Promise.all([refreshMods(), refreshAllOrigins()]); // After the drives (refreshRetro), which name where each is.
   } catch (error) {
     // showPinForm() already explained a wrong PIN.
   }
@@ -1366,13 +1427,15 @@ byId('mod-stop').addEventListener('click', () => { modStopRequested = true; });
 
 if (pin()) {
   Promise.all([refreshStatus(), refreshFiles(), refreshRetro(), refreshCleanup()])
-    .then(() => Promise.all([refreshMods(), refreshOrigins()])).catch(() => undefined);
+    .then(() => Promise.all([refreshMods(), refreshAllOrigins()])).catch(() => undefined);
 }
 setInterval(() => {
   if (!pin() || byId('app').classList.contains('hidden')) return;
   refreshStatus().catch(() => undefined);
   // A conversion may also be started from the TV's Plus menu.
-  if (!originsPoll && !packBusy) refreshOrigins().catch(() => undefined);
+  for (const kind of /** @type {OriginsKind[]} */ (['audio', 'videos'])) {
+    if (!originsPoll[kind] && !packBusy) refreshOrigins(kind).catch(() => undefined);
+  }
 }, REFRESH_MS);
 </script>
 </body>

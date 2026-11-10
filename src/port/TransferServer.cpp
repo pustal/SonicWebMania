@@ -29,11 +29,13 @@
  *   POST /api/mods/:folder/order?delta=-1|1 moves a mod up (higher priority) or down
  *   POST /api/mods/:folder/move?dest=tv|usb[&mount=...]   moves a mod between the TV and a drive
  *   DELETE /api/mods/:folder            removes a mod (one in use: at the next start)
- *   GET  /api/origins         JSON: Sonic Origins' sound files found, the conversion's state, the converted packs
- *   PUT  /api/origins/files/:name?dest=tv|usb[&mount=...]   raw body = one of Sonic Origins' sound files
- *   DELETE /api/origins/files removes those files (once converted they are not needed)
- *   POST /api/origins/convert has the engine convert them (see RSDK::Plus::StartOriginsAudioConversion())
- *   DELETE /api/origins/packs/:game   removes a game's converted audio
+ *   GET  /api/origins/:kind   JSON (kind: audio or videos): Sonic Origins' files found, the conversion's
+ *                             state, the converted packs
+ *   PUT  /api/origins/:kind/files/:name?dest=tv|usb[&mount=...]   raw body = one of Sonic Origins' files
+ *   DELETE /api/origins/:kind/files   removes those files (once converted they are not needed)
+ *   POST /api/origins/:kind/convert   has the engine convert them (RSDK::Plus::StartOriginsAudioConversion(),
+ *                             StartOriginsVideoConversion())
+ *   DELETE /api/origins/:kind/packs/:game   removes a game's converted audio or videos
  *   GET  /api/cleanup         JSON: leftovers of interrupted uploads, moves and conversions
  *   POST /api/cleanup         removes them
  *
@@ -1541,7 +1543,7 @@ void TransferServer::RegisterModRoutes()
 namespace
 {
 
-/** Largest Sonic Origins sound file accepted (the biggest, SCD_music.awb, is about 270 MB). */
+/** Largest Sonic Origins file accepted (the biggest, SCD_music.awb, is about 270 MB). */
 constexpr std::uint64_t kMaxOriginsFileBytes = 512ull * 1024ull * 1024ull;
 
 /** "tv" or "usb" for @p path, with the drive's mount point. */
@@ -1556,9 +1558,42 @@ std::string LocationOf(const std::string &path, std::string *mount)
     return "tv";
 }
 
+/** True when @p name ends with @p suffix. */
+bool EndsWith(const std::string &name, const char *suffix)
+{
+    const std::size_t length = std::strlen(suffix);
+    return name.size() >= length && name.compare(name.size() - length, length, suffix) == 0;
+}
+
+/** The first bytes Sonic Origins' file @p name starts with: "@UTF" (.acb), "AFS2" (.awb), "CRID" (.usm). */
+const char *OriginsMagic(const std::string &name)
+{
+    if (EndsWith(name, ".awb"))
+        return "AFS2";
+    if (EndsWith(name, ".usm"))
+        return "CRID";
+    return "@UTF";
+}
+
 } // namespace
 
-bool TransferServer::OriginsConversionRunning() const { return originsHooks_.status && originsHooks_.status().running; }
+const OriginsHooks *TransferServer::FindOriginsHooks(const std::string &kind) const
+{
+    if (kind == "audio")
+        return &originsAudio_;
+    if (kind == "videos")
+        return &originsVideo_;
+    return nullptr;
+}
+
+bool TransferServer::OriginsConversionRunning() const
+{
+    for (const OriginsHooks *hooks : { &originsAudio_, &originsVideo_ }) {
+        if (hooks->status && hooks->status().running)
+            return true;
+    }
+    return false;
+}
 
 void TransferServer::RegisterOriginsRoutes()
 {
@@ -1572,18 +1607,27 @@ void TransferServer::RegisterOriginsRoutes()
             folders.push_back(folder + "/" + kOriginsFolderName);
         return folders;
     };
-    const auto knownFile = [this](const std::string &name) {
-        return std::find(originsHooks_.fileNames.begin(), originsHooks_.fileNames.end(), name) != originsHooks_.fileNames.end();
+    // The :kind path part ("audio" or "videos"), or an error.
+    const auto hooksFor = [this](const httplib::Request &req, httplib::Response &res) -> const OriginsHooks * {
+        const OriginsHooks *hooks = FindOriginsHooks(req.path_params.at("kind"));
+        if (!hooks || hooks->fileNames.empty()) {
+            Fail(res, 404, "Unknown kind: audio or videos.");
+            return nullptr;
+        }
+        return hooks;
     };
 
-    server.Get("/api/origins", [this, originsFolders](const httplib::Request &, httplib::Response &res) {
-        const OriginsAudioState state = originsHooks_.status ? originsHooks_.status() : OriginsAudioState();
+    server.Get("/api/origins/:kind", [this, originsFolders, hooksFor](const httplib::Request &req, httplib::Response &res) {
+        const OriginsHooks *hooks = hooksFor(req, res);
+        if (!hooks)
+            return;
+        const OriginsState state = hooks->status ? hooks->status() : OriginsState();
         std::ostringstream json;
-        json << "{\"available\":" << (originsHooks_.start && !setupMode_.load() ? "true" : "false")
-             << ",\"running\":" << (state.running ? "true" : "false") << ",\"percent\":" << state.percent << ",\"message\":\""
-             << JsonEscape(state.message) << "\",\"files\":[";
+        json << "{\"available\":" << (hooks->start && hooks->convertible && !setupMode_.load() ? "true" : "false")
+             << ",\"convertible\":" << (hooks->convertible ? "true" : "false") << ",\"running\":" << (state.running ? "true" : "false")
+             << ",\"percent\":" << state.percent << ",\"message\":\"" << JsonEscape(state.message) << "\",\"files\":[";
         bool first = true;
-        for (const std::string &name : originsHooks_.fileNames) {
+        for (const std::string &name : hooks->fileNames) {
             json << (first ? "" : ",") << "{\"name\":\"" << JsonEscape(name) << "\"";
             first = false;
             for (const std::string &folder : originsFolders()) {
@@ -1604,7 +1648,7 @@ void TransferServer::RegisterOriginsRoutes()
             json << (first ? "" : ",") << "{\"game\":\"" << game.id << "\",\"title\":\"" << JsonEscape(game.title) << "\"";
             first = false;
             for (const std::string &folder : retro_.PackFolders()) {
-                const std::string path = folder + "/" + game.id + kOriginsPackSuffix;
+                const std::string path = folder + "/" + game.id + hooks->packSuffix;
                 std::error_code ec;
                 if (!std::filesystem::is_regular_file(path, ec))
                     continue;
@@ -1620,19 +1664,22 @@ void TransferServer::RegisterOriginsRoutes()
         res.set_content(json.str(), kJsonType);
     });
 
-    server.Put("/api/origins/files/:name",
-               [this, originsFolders, knownFile](const httplib::Request &req, httplib::Response &res, const httplib::ContentReader &reader) {
+    server.Put("/api/origins/:kind/files/:name",
+               [this, originsFolders, hooksFor](const httplib::Request &req, httplib::Response &res, const httplib::ContentReader &reader) {
+        const OriginsHooks *hooks = hooksFor(req, res);
+        if (!hooks)
+            return;
         const std::string name = req.path_params.at("name");
-        if (!knownFile(name))
-            return Fail(res, 404, name + " is not one of the Sonic Origins sound files this page takes.");
+        if (std::find(hooks->fileNames.begin(), hooks->fileNames.end(), name) == hooks->fileNames.end())
+            return Fail(res, 404, name + " is not one of the Sonic Origins files this section takes.");
         if (OriginsConversionRunning())
-            return Fail(res, 409, "Sonic Origins' audio is being converted. Upload when it has finished.");
+            return Fail(res, 409, "Sonic Origins files are being converted. Upload when it has finished.");
 
         std::uint64_t expected = 0;
         if (!ContentLength(req, &expected) || expected < 16)
             return Fail(res, 411, "The upload must state its size (Content-Length).");
         if (expected > kMaxOriginsFileBytes)
-            return Fail(res, 413, "No Sonic Origins sound file is this big; refusing " + HumanBytes(expected) + ".");
+            return Fail(res, 413, "No Sonic Origins file this page takes is this big; refusing " + HumanBytes(expected) + ".");
         Destination dest;
         if (!ParseDestination(req, storage_, &dest, res))
             return;
@@ -1676,14 +1723,12 @@ void TransferServer::RegisterOriginsRoutes()
             return Fail(res, 400, "The upload was interrupted or could not be written.");
         }
 
-        // A CRIWARE file starts with "@UTF" (.acb) or "AFS2" (.awb).
         char magic[4] = {};
         {
             std::ifstream in(partPath, std::ios::binary);
             in.read(magic, sizeof(magic));
         }
-        const bool awb = name.size() > 4 && name.compare(name.size() - 4, 4, ".awb") == 0;
-        if (std::memcmp(magic, awb ? "AFS2" : "@UTF", 4) != 0) {
+        if (std::memcmp(magic, OriginsMagic(name), 4) != 0) {
             std::filesystem::remove(partPath, ec);
             PublishEvent("That file is not " + name + ".");
             return Fail(res, 415, "That file is not Sonic Origins' " + name + ".");
@@ -1703,13 +1748,16 @@ void TransferServer::RegisterOriginsRoutes()
         res.set_content("installed", kTextType);
     });
 
-    server.Delete("/api/origins/files", [this, originsFolders](const httplib::Request &, httplib::Response &res) {
+    server.Delete("/api/origins/:kind/files", [this, originsFolders, hooksFor](const httplib::Request &req, httplib::Response &res) {
+        const OriginsHooks *hooks = hooksFor(req, res);
+        if (!hooks)
+            return;
         if (OriginsConversionRunning())
-            return Fail(res, 409, "Sonic Origins' audio is being converted. Remove the files when it has finished.");
+            return Fail(res, 409, "Sonic Origins files are being converted. Remove them when it has finished.");
         std::uint64_t freed = 0;
         int removed         = 0;
         for (const std::string &folder : originsFolders()) {
-            for (const std::string &name : originsHooks_.fileNames) {
+            for (const std::string &name : hooks->fileNames) {
                 const std::string path   = folder + "/" + name;
                 const std::uint64_t size = Storage::FileSize(path);
                 std::error_code ec;
@@ -1721,31 +1769,39 @@ void TransferServer::RegisterOriginsRoutes()
             std::error_code ec;
             std::filesystem::remove(folder, ec); // Only when empty.
         }
-        PublishEvent("Removed Sonic Origins' sound files (" + HumanBytes(freed) + ").");
+        PublishEvent("Removed " + std::to_string(removed) + " Sonic Origins file(s) (" + HumanBytes(freed) + ").");
         res.set_content("Removed " + std::to_string(removed) + " file(s), " + HumanBytes(freed) + " freed.", kTextType);
     });
 
-    server.Post("/api/origins/convert", [this](const httplib::Request &, httplib::Response &res) {
-        if (!originsHooks_.start || setupMode_.load())
+    server.Post("/api/origins/:kind/convert", [this, hooksFor](const httplib::Request &req, httplib::Response &res) {
+        const OriginsHooks *hooks = hooksFor(req, res);
+        if (!hooks)
+            return;
+        if (!hooks->convertible)
+            return Fail(res, 409, "This build cannot convert them.");
+        if (!hooks->start || setupMode_.load())
             return Fail(res, 409, "The game must be running on the TV to convert (it does the work).");
         if (uploadInProgress_.load())
             return Fail(res, 409, "Wait for the upload to finish.");
-        if (!originsHooks_.start())
+        if (!hooks->start())
             return Fail(res, 409, "A conversion is already running.");
-        PublishEvent("Converting Sonic Origins' audio...");
+        PublishEvent("Converting Sonic Origins' files...");
         res.set_content("started", kTextType);
     });
 
-    server.Delete("/api/origins/packs/:game", [this](const httplib::Request &req, httplib::Response &res) {
+    server.Delete("/api/origins/:kind/packs/:game", [this, hooksFor](const httplib::Request &req, httplib::Response &res) {
+        const OriginsHooks *hooks = hooksFor(req, res);
+        if (!hooks)
+            return;
         const RetroGameInfo *game = RetroLibrary::FindGame(req.path_params.at("game"));
         if (!game)
             return Fail(res, 404, "Unknown game.");
         if (OriginsConversionRunning())
-            return Fail(res, 409, "Sonic Origins' audio is being converted. Try again when it has finished.");
-        const std::string fileName = std::string(game->id) + kOriginsPackSuffix;
+            return Fail(res, 409, "Sonic Origins files are being converted. Try again when it has finished.");
+        const std::string fileName = std::string(game->id) + hooks->packSuffix;
         for (const std::string &folder : retro_.PackFolders()) {
             if (IsPackInUse(folder + "/" + fileName))
-                return Fail(res, 409, std::string(game->title) + "'s Sonic Origins audio is in use this session. It can be removed after a restart.");
+                return Fail(res, 409, std::string(game->title) + "'s converted files are in use this session. They can be removed after a restart.");
         }
         int removed = 0;
         for (const std::string &folder : retro_.PackFolders()) {
@@ -1754,9 +1810,9 @@ void TransferServer::RegisterOriginsRoutes()
                 ++removed;
         }
         if (!removed)
-            return Fail(res, 404, "That game has no converted audio.");
+            return Fail(res, 404, "Nothing converted for that game.");
         NoteRestartNeeded();
-        PublishEvent(std::string(game->title) + ": Sonic Origins audio removed.");
+        PublishEvent(std::string(game->title) + ": converted files removed.");
         res.set_content("removed", kTextType);
     });
 }

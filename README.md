@@ -2,7 +2,7 @@
 
 # SonicWebMania
 
-**Version 3.2.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
+**Version 3.3.0** · Sonic Mania for LG webOS TVs: the [RSDKv5](https://github.com/RSDKModding/RSDKv5-Decompilation)
 and [Sonic Mania](https://github.com/RSDKModding/Sonic-Mania-Decompilation) decompilations, through their Plus
 forks ([RSDKv5-Decompilation-Plus](https://github.com/pustal/RSDKv5-Decompilation-Plus) and
 [Sonic-Mania-Decompilation-Plus](https://github.com/pustal/Sonic-Mania-Decompilation-Plus)), built as a
@@ -53,7 +53,7 @@ These show the app's own screens and the Plus menu; none of them contain game gr
 
 | Transfer page: PIN | Transfer page: data, saves and settings |
 |---|---|
-| <img src="docs/images/web-pin.png" alt="Transfer page asking for the PIN" width="260"> | <img src="docs/images/web-page.png" alt="Transfer page with storage, Sonic Mania's pack, saves per game, retro game packs, Sonic Origins audio, mods and settings" width="260"> |
+| <img src="docs/images/web-pin.png" alt="Transfer page asking for the PIN" width="260"> | <img src="docs/images/web-page.png" alt="Transfer page with storage, Sonic Mania's pack, saves per game, retro game packs, Sonic Origins audio and videos, mods and settings" width="260"> |
 
 ## Remote control
 
@@ -92,7 +92,7 @@ the remote are held for at least a frame, so the game never misses a short press
 - The engine reopens a pack for every file it reads, and the Plus menu can switch to any
   game, so every pack found at launch counts as in use: replacing or moving one copies it
   now and switches at the next start (the page says so), and removing one waits until then.
-- **Sonic Origins audio**: upload Sonic Origins' sound files, convert them (the TV does
+- **Sonic Origins audio** and **Sonic Origins videos**: upload Sonic Origins' files, convert them (the TV does
   it, in the background; the page shows its progress), remove a game's converted audio,
   and remove the uploaded files once converted.
 - **Clean up** removes what interrupted uploads, moves and Sonic CD conversions leave
@@ -141,6 +141,14 @@ How each game plays depends on what you upload:
   removed. Music loops at Origins' own loop points and the speed shoes play the zone's
   track faster, as in Origins. Sounds then come from Sonic Origins first, then from the
   earlier release's pack, then from Sonic Mania's.
+- **Sonic Origins' videos.** The page's **Sonic Origins videos** section takes the `.usm`
+  files from its `image/x64/raw/movie` folder (the ten it lists, about 360 MB; not the `_4k` or
+  `_anim` copies) and **Convert** has the TV turn them into videos the engine plays,
+  `<game>-origins-video.rsdk` (Theora, 1024x512). Sonic CD then shows its own opening and
+  endings, and each game Origins' animated intro when a new game starts, its outro before the
+  credits after the ending, and the Sonic Team logo before the title screen (Start, A or B
+  skips them). Converting decodes every frame, which takes the TV a long while (an hour or
+  more); you can keep playing meanwhile.
 - **Sound from Sonic Mania.** With Sonic Mania's `Data.rsdk` installed, whatever music or
   sound effect a retro game's packs lack comes from Mania's pack (on by default; a
   checkbox on the page turns it off). The game's own packs always win.
@@ -248,6 +256,7 @@ prints these figures every time):
 | Your `Data.rsdk` | the size of your file |
 | Retro game packs (optional, on the TV or a USB drive) | Origins 17-35 MiB each; earlier releases 43-75 MiB each |
 | Sonic Origins' audio (optional) | the uploaded files ~380 MiB (removable once converted); converted packs ~30, 66 and 240 MiB |
+| Sonic Origins' videos (optional) | the uploaded files ~360 MiB (removable once converted); converted packs a few tens of MiB each |
 | Saves and settings | well under 1 MiB (time-attack replays add a little) |
 | Headroom required during an upload | 32 MiB, on top of the file being uploaded |
 

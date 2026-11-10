@@ -11,7 +11,7 @@
 # See README.md for the full walkthrough.
 
 cmake_minimum_required(VERSION 3.21)
-project(SonicWebMania VERSION 3.2.0 LANGUAGES C CXX)
+project(SonicWebMania VERSION 3.3.0 LANGUAGES C CXX)
 
 set(SWM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${SWM_ROOT}/cmake")
@@ -85,9 +85,22 @@ set(INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 set(INSTALL_CMAKE_PACKAGE_MODULE OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/ogg EXCLUDE_FROM_ALL)
 
-# Theora has no CMake build; only its decoder is needed.
+# Theora has no CMake build. Its decoder plays the cutscenes; its encoder is
+# for the engine's Sonic Origins video converter (PLUS_VIDEO_CONVERTER below).
 set(_swm_theora_dir "${SWM_ROOT}/external/theora")
 add_library(swm_theora STATIC
+    ${_swm_theora_dir}/lib/analyze.c
+    ${_swm_theora_dir}/lib/encapiwrapper.c
+    ${_swm_theora_dir}/lib/encfrag.c
+    ${_swm_theora_dir}/lib/encinfo.c
+    ${_swm_theora_dir}/lib/encode.c
+    ${_swm_theora_dir}/lib/enquant.c
+    ${_swm_theora_dir}/lib/fdct.c
+    ${_swm_theora_dir}/lib/huffenc.c
+    ${_swm_theora_dir}/lib/mathops.c
+    ${_swm_theora_dir}/lib/mcenc.c
+    ${_swm_theora_dir}/lib/rate.c
+    ${_swm_theora_dir}/lib/tokenize.c
     ${_swm_theora_dir}/lib/apiwrapper.c
     ${_swm_theora_dir}/lib/bitpack.c
     ${_swm_theora_dir}/lib/decapiwrapper.c
@@ -193,6 +206,9 @@ else()
     set(RETRO_DISABLE_LOG ON CACHE BOOL "" FORCE)
 endif()
 set(RETRO_OUTPUT_NAME "SonicWebMania" CACHE STRING "Executable name" FORCE)
+# Sonic Origins' video converter: the engine builds libvpx's VP9 decoder; Theora's encoder is in swm_theora.
+set(PLUS_VIDEO_CONVERTER ON CACHE BOOL "" FORCE)
+set(PLUS_THEORA_ENCODER_LINKED ON CACHE BOOL "" FORCE)
 
 add_subdirectory("${SWM_RSDK_DIR}" rsdk)
 

@@ -49,21 +49,24 @@ struct TransferStatus {
     std::string lastEvent;                  ///< Short human-readable description of the latest event.
 };
 
-/** How the engine's Sonic Origins audio conversion is going (RSDK::Plus::GetOriginsAudioStatus()). */
-struct OriginsAudioState {
+/** How one of the engine's Sonic Origins conversions is going (RSDK::Plus::GetOriginsAudioStatus() and friends). */
+struct OriginsState {
     bool running  = false;
     int percent   = 0;
     std::string message; ///< Progress, or how the last one ended.
 };
 
 /**
- * What the page's Sonic Origins audio section needs from the engine, which
- * the server does not link to directly: main() passes RSDK::Plus' functions.
+ * What a Sonic Origins section of the page (its audio, its videos) needs from
+ * the engine, which the server does not link to directly: main() passes
+ * RSDK::Plus' functions.
  */
-struct OriginsAudioHooks {
-    std::vector<std::string> fileNames;           ///< The files the converter reads (RSDK::Plus::kOriginsAudioFileNames).
-    std::function<bool()> start;                  ///< Starts a conversion; false if one runs. Any thread.
-    std::function<OriginsAudioState()> status;    ///< Any thread.
+struct OriginsHooks {
+    std::vector<std::string> fileNames;      ///< The files the converter reads (RSDK::Plus::kOriginsAudioFileNames...).
+    std::string packSuffix;                  ///< "<game>" + this: the packs it writes ("-origins-audio.rsdk").
+    bool convertible = true;                 ///< This build converts them.
+    std::function<bool()> start;             ///< Starts a conversion; false if one runs. Any thread.
+    std::function<OriginsState()> status;    ///< Any thread.
 };
 
 class TransferServer
@@ -71,8 +74,9 @@ class TransferServer
 public:
     /** Folder next to the retro packs (on the TV or a drive) that Sonic Origins' sound files go in, as the engine expects. */
     static constexpr const char *kOriginsFolderName = "origins";
-    /** "<game>" + this: a game's converted Sonic Origins audio, written by the engine next to the "origins" folder. */
-    static constexpr const char *kOriginsPackSuffix = "-origins-audio.rsdk";
+    /** "<game>" + these: a game's converted Sonic Origins audio and videos, written by the engine next to the "origins" folder. */
+    static constexpr const char *kOriginsPackSuffix      = "-origins-audio.rsdk";
+    static constexpr const char *kOriginsVideoPackSuffix = "-origins-video.rsdk";
 
     /** The game is not running yet: uploads are installed immediately. */
     static constexpr bool kSetupMode = true;
@@ -126,11 +130,15 @@ public:
     void SetModsInUse(const std::vector<std::string> &folders);
 
     /**
-     * Connects the page's Sonic Origins audio section to the engine. Call
-     * before Start(). Without it (or in setup mode, before the engine runs)
-     * the page can upload the files but not convert them.
+     * Connects the page's Sonic Origins sections (audio, videos) to the
+     * engine. Call before Start(). In setup mode, before the engine runs, the
+     * page can upload the files but not convert them.
      */
-    void SetOriginsAudioHooks(OriginsAudioHooks hooks) { originsHooks_ = std::move(hooks); }
+    void SetOriginsHooks(OriginsHooks audio, OriginsHooks video)
+    {
+        originsAudio_ = std::move(audio);
+        originsVideo_ = std::move(video);
+    }
 
     /** The bound port, or 0 when not running. */
     std::uint16_t Port() const { return port_.load(); }
@@ -153,8 +161,11 @@ private:
     /** The /api/origins routes (see TransferServer.cpp). */
     void RegisterOriginsRoutes();
 
-    /** True while the engine converts Sonic Origins' audio (it writes in the pack folders). */
+    /** True while the engine converts Sonic Origins' audio or videos (it writes in the pack folders). */
     bool OriginsConversionRunning() const;
+
+    /** The hooks of section @p kind ("audio" or "videos"), or null. */
+    const OriginsHooks *FindOriginsHooks(const std::string &kind) const;
 
     /** True when mod @p folder is one of those set by SetModsInUse(). */
     bool IsModInUse(const std::string &folder) const;
@@ -179,7 +190,8 @@ private:
     const RetroLibrary &retro_;
     const ModLibrary &mods_;
     const std::string pin_;
-    OriginsAudioHooks originsHooks_;
+    OriginsHooks originsAudio_;
+    OriginsHooks originsVideo_;
 
     std::unique_ptr<httplib::Server> server_;
     std::thread thread_;
