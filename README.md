@@ -15,8 +15,14 @@ forks ([RSDKv5-Decompilation-Plus](https://github.com/pustal/RSDKv5-Decompilatio
 - **Save transfer.** The same page lists your saves (Sonic Mania's and each retro
   game's) for download, and lets you upload saves from another device.
 - **Plays with the remote.** Controllers work as usual; the remote is mapped too (below).
-- **Back opens the Plus menu** at any time: Resume, Games, Achievements, Settings, Restart
-  game, Exit. It also shows the transfer page's address and PIN.
+- **Back opens the Plus menu** at any time: Resume, Games, Achievements, Settings, Updates,
+  Restart game, Exit. It also shows the transfer page's address and PIN.
+- **Update check.** At start (unless turned off in the Plus menu's Settings) the app asks
+  GitHub for SonicWebMania's latest release and says over the game when a newer one is
+  out; the **Updates** page checks again. The TV cannot open a web page, so the page says
+  where to get it: the Homebrew Channel, with the repository
+  `https://pustal.github.io/webos-repo/sfw/api/apps.json` added in its settings, or the
+  `.ipk` from this repository's Releases.
 - **Retro games.** The engine also plays Sonic the Hedgehog, Sonic 2 and Sonic CD from
   your own data packs: those of Sonic Origins and/or of the earlier releases, with save
   slots, Sonic Origins' own music and sounds (uploaded from its files and converted on the

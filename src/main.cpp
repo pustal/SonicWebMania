@@ -203,7 +203,13 @@ void RequestRestart()
 }
 
 
-/** Tells the Plus module what only the app knows: the USB drives' packs, the page's address, "Restart game". */
+/** Where this app's releases are published (owner/repository on GitHub), for the update check. */
+constexpr const char *kReleasesRepository = "pustal/SonicWebMania";
+
+/** The author's Homebrew Channel repository, its listing without adult apps, which lists this app. */
+constexpr const char *kHomebrewRepository = "https://pustal.github.io/webos-repo/sfw/api/apps.json";
+
+/** Tells the Plus module what only the app knows: the USB drives' packs, the page's address, "Restart game", its updates. */
 void ConfigurePlus(const swm::RetroLibrary &retro, const swm::TransferServer *server)
 {
     // [0] is the TV's, which the engine finds itself. The engine also finds the fan games'
@@ -229,6 +235,18 @@ void ConfigurePlus(const swm::RetroLibrary &retro, const swm::TransferServer *se
         texts.originsVideoHint = texts.originsAudioHint;
     }
     RSDK::Plus::SetPlatformTexts(texts);
+
+    // The Plus menu's update check (Updates page, and a notice at start): this app's own
+    // releases, not the engine's. A TV app cannot open a browser, so the page says where
+    // updates come from instead: the Homebrew Channel, with this author's repository added
+    // (its listing without adult apps), or the releases on GitHub.
+    RSDK::Plus::UpdateSource updates;
+    updates.repository  = kReleasesRepository;
+    updates.version     = SWM_VERSION;
+    updates.canOpenPage = false;
+    updates.howToUpdate = std::string("Update from the Homebrew Channel: in its settings, add the repository ") + kHomebrewRepository
+                          + ". Or download the .ipk from the Releases of github.com/" + kReleasesRepository + ".";
+    RSDK::Plus::SetUpdateSource(updates);
     RSDK::Plus::AddMenuAction("Restart game", &RequestRestart);
     RSDK::Plus::SetFrameCallback(&OnEngineFrame);
 }
