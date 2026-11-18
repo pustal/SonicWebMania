@@ -321,6 +321,18 @@ std::vector<std::string> PackPaths(const RetroLibrary &retro, const std::string 
     return paths;
 }
 
+/** Every place a fan game's file may be: the TV's fan folder, then each USB drive's. */
+std::vector<std::string> FanPaths(const RetroLibrary &retro, const FanGameInfo &game)
+{
+    std::vector<std::string> paths;
+    for (const std::string &folder : retro.FanFolders())
+        paths.push_back(folder + "/" + game.fileName);
+    return paths;
+}
+
+/** Largest fan game file accepted (Sonic Nexus's is 10 MB). */
+constexpr std::uint64_t kMaxFanFileBytes = 256ull * 1024ull * 1024ull;
+
 /**
  * Where a staged copy of a pack waits (`<path>.pending` for one of @p paths,
  * the TV's first): "tv", "usb", or "" when nothing is staged.
@@ -363,6 +375,8 @@ std::vector<std::string> CleanableFiles(const Storage &storage, const RetroLibra
         folders.push_back(packFolder);
         folders.push_back(packFolder + "/" + TransferServer::kOriginsFolderName); // Interrupted uploads of Sonic Origins' files.
     }
+    for (const std::string &fanFolder : retro.FanFolders())
+        folders.push_back(fanFolder); // Interrupted uploads of the fan games' files.
     for (const UsbDrive &drive : ListUsbDrives())
         folders.push_back(Storage::UsbFolder(drive.mountPoint));
 
@@ -821,6 +835,7 @@ void TransferServer::RegisterRoutes()
     });
 
     RegisterRetroRoutes();
+    RegisterFanRoutes();
     RegisterModRoutes();
     RegisterOriginsRoutes();
 }
@@ -868,6 +883,141 @@ std::string PackLabel(const RetroGameInfo &game, RetroEdition edition)
 
 } // namespace
 
+/**
+ * The fan games' files (RetroGames.h): uploaded to the TV's `fan` folder or a
+ * USB drive's `SonicWebMania/fan`, under the name the engine looks for. The
+ * list comes with /api/retro ("fan").
+ *
+ *   PUT    /api/fan/:game?dest=tv|usb&mount=...  the file as the body
+ *   DELETE /api/fan/:game
+ */
+void TransferServer::RegisterFanRoutes()
+{
+    httplib::Server &server = *server_;
+
+    server.Put("/api/fan/:game", [this](const httplib::Request &req, httplib::Response &res, const httplib::ContentReader &reader) {
+        const FanGameInfo *game = RetroLibrary::FindFanGame(req.path_params.at("game"));
+        if (!game)
+            return Fail(res, 404, "Unknown game.");
+
+        std::uint64_t expected = 0;
+        if (!ContentLength(req, &expected) || expected < kMinimumPackBytes)
+            return Fail(res, 411, "The upload must state its size (Content-Length).");
+        if (expected > kMaxFanFileBytes)
+            return Fail(res, 413, std::string(game->title) + "'s file is not this big; refusing " + HumanBytes(expected) + ".");
+
+        // Where it goes: the TV's data folder, or a USB drive's SonicWebMania/fan folder.
+        std::string folder;
+        std::uint64_t free = 0, margin = 0;
+        if (req.get_param_value("dest") == "usb") {
+            UsbDrive drive;
+            if (!FindUsbDrive(req.get_param_value("mount"), &drive))
+                return Fail(res, 404, "That USB drive is not connected.");
+            if (!drive.writable)
+                return Fail(res, 403, "That USB drive is read-only.");
+            folder = RetroLibrary::UsbFanFolder(drive.mountPoint);
+            free   = drive.freeBytes;
+            margin = kUsbSafetyMarginBytes;
+        }
+        else {
+            folder = retro_.TvFanFolder();
+            free   = storage_.FreeBytes();
+            margin = Storage::kSafetyMarginBytes;
+        }
+        if (expected + margin > free) {
+            return Fail(res, 507,
+                        "Not enough space: this file needs " + HumanBytes(expected + margin) + " (including a safety margin), "
+                            + HumanBytes(free) + " is free.");
+        }
+
+        // While the game may read it, the new file waits as <file>.pending for the next start (ApplyPendingPacks).
+        bool stage = false;
+        for (const std::string &other : FanPaths(retro_, *game))
+            stage = stage || IsPackInUse(other);
+
+        std::error_code ec;
+        std::filesystem::create_directories(folder, ec);
+        if (ec)
+            return Fail(res, 500, "Could not create " + folder + ": " + ec.message());
+
+        if (uploadInProgress_.exchange(true))
+            return Fail(res, 409, "Another upload is already running.");
+        const std::unique_ptr<std::atomic<bool>, void (*)(std::atomic<bool> *)> uploadGuard(
+            &uploadInProgress_, [](std::atomic<bool> *flag) { flag->store(false); });
+
+        {
+            std::lock_guard<std::mutex> lock(statusMutex_);
+            status_.uploading     = true;
+            status_.receivedBytes = 0;
+            status_.expectedBytes = expected;
+        }
+        PublishEvent(std::string("Receiving ") + game->title + "...");
+
+        const std::string target   = folder + "/" + game->fileName;
+        const std::string partPath = target + ".part";
+        const std::int64_t written = StreamBodyToFile(reader, partPath, expected, [this](std::uint64_t total) {
+            std::lock_guard<std::mutex> lock(statusMutex_);
+            status_.receivedBytes = total;
+        });
+        {
+            std::lock_guard<std::mutex> lock(statusMutex_);
+            status_.uploading = false;
+        }
+        if (written < 0 || static_cast<std::uint64_t>(written) != expected) {
+            std::filesystem::remove(partPath, ec);
+            PublishEvent("Upload interrupted. Please try again.");
+            return Fail(res, 400, "The upload was interrupted or could not be written.");
+        }
+        if (RetroLibrary::InspectFanFile(partPath) != PackState::Ready) {
+            std::filesystem::remove(partPath, ec);
+            PublishEvent(std::string("That file is not ") + game->title + "'s Data.bin.");
+            return Fail(res, 415, std::string("That file is not ") + game->title + "'s Data.bin (an RSDKv2 data file).");
+        }
+
+        const std::string destination = stage ? Storage::PendingPathFor(target) : target;
+        std::filesystem::rename(partPath, destination, ec);
+        if (ec) {
+            std::filesystem::remove(partPath, ec);
+            return Fail(res, 500, "Could not move the file into place.");
+        }
+        // One copy only: the TV's folder is searched first, so an older copy there would win.
+        if (!stage) {
+            for (const std::string &other : FanPaths(retro_, *game)) {
+                if (other != target)
+                    std::filesystem::remove(other, ec);
+            }
+        }
+
+        NoteRestartNeeded();
+        PublishEvent(stage ? std::string(game->title) + " received. It replaces the one in use at the next start."
+                           : std::string(game->title) + " installed.");
+        res.set_content(stage ? "staged" : "installed", kTextType);
+    });
+
+    server.Delete("/api/fan/:game", [this](const httplib::Request &req, httplib::Response &res) {
+        const FanGameInfo *game = RetroLibrary::FindFanGame(req.path_params.at("game"));
+        if (!game)
+            return Fail(res, 404, "Unknown game.");
+        const std::vector<std::string> paths = FanPaths(retro_, *game);
+        for (const std::string &path : paths) {
+            if (IsPackInUse(path))
+                return Fail(res, 409, std::string(game->title) + " may be read by the game running now. Restart the game first.");
+        }
+        int removed = 0;
+        for (const std::string &path : paths) {
+            std::error_code ec;
+            if (std::filesystem::remove(path, ec))
+                ++removed;
+        }
+        if (removed == 0)
+            return Fail(res, 404, "That game is not installed.");
+
+        NoteRestartNeeded();
+        PublishEvent(std::string(game->title) + " removed.");
+        res.set_content("removed", kTextType);
+    });
+}
+
 void TransferServer::RegisterRetroRoutes()
 {
     httplib::Server &server = *server_;
@@ -901,6 +1051,17 @@ void TransferServer::RegisterRetroRoutes()
                  << ",\"classic\":"
                  << PackJson(game.classic, game.classic.state != PackState::Missing && IsPackInUse(game.classic.path),
                              PendingLocation(PackPaths(retro_, game.info.id, RetroEdition::Classic)))
+                 << "}";
+            first = false;
+        }
+        json << "],\"fan\":[";
+        first = true;
+        for (const FanGame &game : retro_.ScanFan()) {
+            json << (first ? "" : ",") << "{\"id\":\"" << game.info.id << "\",\"title\":\"" << JsonEscape(game.info.title)
+                 << "\",\"fileName\":\"" << JsonEscape(game.info.fileName) << "\",\"source\":\"" << JsonEscape(game.info.source)
+                 << "\",\"file\":"
+                 << PackJson(game.file, game.file.state != PackState::Missing && IsPackInUse(game.file.path),
+                             PendingLocation(FanPaths(retro_, game.info)))
                  << "}";
             first = false;
         }

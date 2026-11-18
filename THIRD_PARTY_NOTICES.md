@@ -8,6 +8,7 @@ file); the decompilations' licences are in `LICENSE.md`.
 |---|---|---|
 | [RSDKv5 Decompilation](https://github.com/RSDKModding/RSDKv5-Decompilation) | Game engine | RSDKv5(U) Decompilation Source Code Licence v2.1 (see LICENSE.md) |
 | [Sonic Mania Decompilation](https://github.com/RSDKModding/Sonic-Mania-Decompilation) | Game logic | Sonic Mania Decompilation Source Code Licence v1 (see LICENSE.md) |
+| [RSDKv2 Decompilation](https://github.com/RSDKModding/RSDKv2-Decompilation) | Sonic Nexus's engine, hosted by the engine (its `RSDK/Plus/Nexus/`) | RSDKv3/v4 Decompilation Source Code Licence v1 (`licenses/RSDKv2-Decompilation.txt`) |
 | [SDL-webOS](https://github.com/webosbrew/SDL-webOS) (SDL 2.30) | Video, audio and input on the TV; bundled as `lib/libSDL2-2.0.so.0` | zlib (`licenses/SDL2.txt`) |
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) | Transfer web server | MIT (`licenses/cpp-httplib.txt`) |
 | [libogg](https://github.com/xiph/ogg) | Cutscene container | BSD-3-Clause (`licenses/libogg.txt`) |

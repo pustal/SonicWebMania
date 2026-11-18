@@ -154,6 +154,8 @@ private:
 
     /** The /api/retro routes (see TransferServer.cpp). */
     void RegisterRetroRoutes();
+    /** The /api/fan routes: the fan games' data files (Sonic Nexus), see TransferServer.cpp. */
+    void RegisterFanRoutes();
 
     /** The /api/mods routes (see TransferServer.cpp). */
     void RegisterModRoutes();

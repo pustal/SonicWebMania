@@ -111,6 +111,16 @@
       <p id="retro-message"></p>
     </section>
 
+    <section id="fan-section">
+      <h2>Fan games</h2>
+      <p class="dim">Games made with an earlier Retro Engine, played from their own data file and chosen on the TV in the
+        Plus menu (press BACK, then Games: they show under "Fan games"). They are stored where "Store packs on" says,
+        in a "fan" folder. New files show up after "Restart game".</p>
+      <div id="fan-games"></div>
+      <progress id="fan-progress" class="hidden" max="100" value="0"></progress>
+      <p id="fan-message"></p>
+    </section>
+
     <section id="origins-section">
       <h2>Sonic Origins audio</h2>
       <p class="dim">Sonic Origins keeps the retro games' music and sounds in files of its own, not in its packs. Upload
@@ -206,8 +216,9 @@
  *             origins: RetroPack, classic: RetroPack }} RetroGame
  * @typedef {{ mount: string, name: string, fileSystem: string, freeBytes: number, totalBytes: number,
  *             writable: boolean, hasFolder: boolean, folder: string }} UsbDrive
+ * @typedef {{ id: string, title: string, fileName: string, source: string, file: RetroPack }} FanGame
  * @typedef {{ tv: { folder: string, freeBytes: number, safetyMarginBytes: number },
- *             drives: UsbDrive[], games: RetroGame[] }} RetroState
+ *             drives: UsbDrive[], games: RetroGame[], fan: FanGame[] }} RetroState
  * @typedef {{ folder: string, name: string, author: string, version: string, description: string, game: string,
  *             targetVersion: number, hasLogic: boolean, bytes: number, files: number, location: 'tv'|'usb',
  *             mount: string, active: boolean, order: number, inUse: boolean, pending: boolean, removing: boolean,
@@ -316,9 +327,9 @@ async function refreshStatus() {
   if (status.dataPack.present) {
     statusLine.textContent = 'Game data installed (' + humanBytes(status.dataPack.size) + ').';
     statusLine.className = 'ok';
-  } else if (lastRetro && lastRetro.games.some((g) => g.playable)) {
-    // Without Sonic Mania the retro games are offered whatever the toggle says (see main.cpp).
-    statusLine.textContent = 'Retro games ready (Sonic Mania not installed, which is fine).';
+  } else if (lastRetro && (lastRetro.games.some((g) => g.playable) || lastRetro.fan.some((g) => g.file.state === 'ready'))) {
+    // Without Sonic Mania the retro and fan games are offered whatever the toggle says (see main.cpp).
+    statusLine.textContent = 'Retro or fan games ready (Sonic Mania not installed, which is fine).';
     statusLine.className = 'ok';
   } else {
     statusLine.textContent = 'No game data yet. Upload Sonic Mania\'s Data.rsdk or a retro game pack below.';
@@ -484,6 +495,7 @@ function renderPackDestinations() {
   renderOriginsDestinations();
   byId('pack-dest-line').textContent = drive
     ? 'On the drive, Sonic Mania\'s Data.rsdk goes in the SonicWebMania folder, the retro packs in SonicWebMania/retro'
+      + ', the fan games in SonicWebMania/fan'
       + ', Sonic Origins\' files in SonicWebMania/retro/origins and mods in SonicWebMania/mods'
       + (drive.hasFolder ? '.' : ' (created with the first upload).')
     : 'Packs go in the app\'s storage on the TV. A USB drive saves the TV\'s space.';
@@ -582,6 +594,139 @@ async function refreshRetro() {
     block.append(title, mode, packRow(game, 'origins'), packRow(game, 'classic'));
     list.append(block);
   }
+  renderFanGames(state.fan);
+}
+
+/**
+ * The fan games' rows: each one's file, where it is, and its upload / remove buttons.
+ * @param {FanGame[]} games
+ */
+function renderFanGames(games) {
+  const list = byId('fan-games');
+  list.replaceChildren();
+  for (const game of games) {
+    const file = game.file;
+    const block = document.createElement('div');
+    block.className = 'game';
+    const title = document.createElement('h3');
+    title.textContent = game.title;
+    const row = document.createElement('div');
+    row.className = 'pack';
+
+    const info = document.createElement('div');
+    info.className = 'info';
+    const name = document.createElement('div');
+    if (file.state === 'ready') {
+      name.append(game.fileName + ': ');
+      const where = document.createElement('span');
+      where.className = 'ok';
+      where.textContent = 'installed on the ' + (file.location === 'usb' ? 'USB drive' : 'TV') + ' (' + humanBytes(file.size || 0) + ')'
+        + (file.inUse ? ', in use now' : '') + pendingNote(file.pending);
+      name.append(where);
+    } else if (file.state === 'missing') {
+      name.textContent = game.fileName + ': not installed';
+    } else {
+      name.append(game.fileName + ': ');
+      const problem = document.createElement('span');
+      problem.className = 'warn';
+      problem.textContent = 'not ' + game.title + '\'s data file, replace it';
+      name.append(problem);
+    }
+    const hint = document.createElement('div');
+    hint.className = 'dim';
+    hint.textContent = game.source;
+    info.append(name, hint);
+
+    const actions = document.createElement('div');
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.bin';
+    input.id = 'fan-' + game.id;
+    input.addEventListener('change', () => {
+      if (input.files && input.files[0]) uploadFanFile(game, input.files[0]).catch(() => undefined);
+      input.value = '';
+    });
+    const choose = document.createElement('label');
+    choose.className = 'button';
+    choose.htmlFor = input.id;
+    choose.textContent = file.state === 'missing' ? 'Upload' : 'Replace';
+    actions.append(input, choose);
+    // A file the running game may read cannot be removed (the TV refuses); replacing it waits for the next start.
+    if (file.state !== 'missing' && !file.inUse) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'secondary';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => removeFanFile(game).catch(() => undefined));
+      actions.append(' ', remove);
+    }
+    row.append(info, actions);
+    block.append(title, row);
+    list.append(block);
+  }
+}
+
+/**
+ * Uploads a fan game's data file to the chosen storage (the TV checks it and names it as the engine expects).
+ * @param {FanGame} game @param {File} file
+ */
+async function uploadFanFile(game, file) {
+  const message = byId('fan-message');
+  const progress = /** @type {HTMLProgressElement} */ (byId('fan-progress'));
+  if (packBusy) {
+    message.textContent = 'Wait for the current upload to finish.';
+    message.className = 'warn';
+    return;
+  }
+  // An RSDKv2 data file starts with its header's size (32-bit, little-endian), within the file.
+  const header = new DataView(await file.slice(0, 5).arrayBuffer());
+  if (file.size < 64 || header.byteLength < 5 || header.getUint32(0, true) <= 5 || header.getUint32(0, true) >= file.size
+      || header.getUint8(4) === 0) {
+    message.textContent = file.name + ' is not ' + game.title + '\'s Data.bin.';
+    message.className = 'warn';
+    return;
+  }
+  const space = packSpace();
+  if (file.size + space.margin > space.free) {
+    message.textContent = 'Not enough space there: needs ' + humanBytes(file.size + space.margin) + ', ' + humanBytes(space.free) + ' free.';
+    message.className = 'warn';
+    return;
+  }
+
+  packBusy = true;
+  progress.classList.remove('hidden');
+  progress.value = 0;
+  message.textContent = 'Uploading ' + file.name + ' (' + humanBytes(file.size) + ')... keep this page open.';
+  message.className = '';
+
+  const result = await new Promise((resolve) => {
+    const request = new XMLHttpRequest();
+    request.open('PUT', '/api/fan/' + game.id + '?' + destinationQuery(packDestination()));
+    request.setRequestHeader('X-Pin', pin());
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) progress.value = Math.floor((event.loaded / event.total) * 100);
+    };
+    request.onload = () => resolve({ ok: request.status === 200, text: request.responseText });
+    request.onerror = () => resolve({ ok: false, text: 'Connection to the TV was lost.' });
+    request.send(file);
+  });
+
+  packBusy = false;
+  progress.classList.add('hidden');
+  message.textContent = !result.ok ? result.text
+    : result.text === 'staged' ? game.title + ': file received. The one in use is replaced at the next start.'
+    : game.title + ': installed. Choose "Restart game" in the Plus menu to find it under Games.';
+  message.className = result.ok ? 'ok' : 'warn';
+  await Promise.all([refreshStatus(), refreshRetro(), refreshCleanup()]);
+}
+
+/** @param {FanGame} game */
+async function removeFanFile(game) {
+  const response = await api('/api/fan/' + game.id, { method: 'DELETE' });
+  const message = byId('fan-message');
+  message.textContent = response.ok ? game.title + ': removed.' : await response.text();
+  message.className = response.ok ? '' : 'warn';
+  await Promise.all([refreshStatus(), refreshRetro(), refreshCleanup()]);
 }
 
 /**

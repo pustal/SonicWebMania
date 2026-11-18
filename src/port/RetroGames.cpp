@@ -37,6 +37,14 @@ const std::vector<RetroGameInfo> &RetroCatalogue()
     return catalogue;
 }
 
+const std::vector<FanGameInfo> &FanCatalogue()
+{
+    static const std::vector<FanGameInfo> catalogue = {
+        { "nexus", "Sonic Nexus", "sonic-nexus.bin", "Data.bin from Sonic Nexus (2008), any name: it is stored as sonic-nexus.bin" },
+    };
+    return catalogue;
+}
+
 std::string RetroGame::ModeDescription() const
 {
     const bool hasOrigins = origins.state == PackState::Ready;
@@ -146,6 +154,29 @@ int RetroLibrary::ApplyPendingPacks() const
 {
     const std::vector<std::string> folders = PackFolders();
     int applied                            = 0;
+    // The fan games' files, replaced while the game read them, as the packs below.
+    const std::vector<std::string> fanFolders = FanFolders();
+    for (const FanGameInfo &info : FanCatalogue()) {
+        for (const std::string &folder : fanFolders) {
+            const std::string target  = folder + "/" + info.fileName;
+            const std::string pending = Storage::PendingPathFor(target);
+            std::error_code ec;
+            if (!std::filesystem::exists(pending, ec))
+                continue;
+            if (InspectFanFile(pending) != PackState::Ready) {
+                std::filesystem::remove(pending, ec);
+                continue;
+            }
+            std::filesystem::rename(pending, target, ec);
+            if (ec)
+                continue;
+            ++applied;
+            for (const std::string &other : fanFolders) {
+                if (other != folder)
+                    std::filesystem::remove(other + "/" + info.fileName, ec);
+            }
+        }
+    }
     for (const RetroGameInfo &info : RetroCatalogue()) {
         for (const RetroEdition edition : { RetroEdition::Origins, RetroEdition::Classic }) {
             const std::string fileName = PackFileName(info.id, edition);
@@ -190,6 +221,80 @@ std::vector<RetroGame> RetroLibrary::Scan() const
         games.push_back(game);
     }
     return games;
+}
+
+const FanGameInfo *RetroLibrary::FindFanGame(const std::string &id)
+{
+    for (const FanGameInfo &info : FanCatalogue()) {
+        if (id == info.id)
+            return &info;
+    }
+    return nullptr;
+}
+
+std::string RetroLibrary::TvFanFolder() const { return storage_.PathFor(kFanFolderName); }
+
+std::string RetroLibrary::UsbFanFolder(const std::string &mountPoint)
+{
+    return mountPoint + "/" + kUsbFolderName + "/" + kFanFolderName;
+}
+
+std::vector<std::string> RetroLibrary::FanFolders() const
+{
+    std::vector<std::string> folders = { TvFanFolder() };
+    for (const UsbDrive &drive : ListUsbDrives())
+        folders.push_back(UsbFanFolder(drive.mountPoint));
+    return folders;
+}
+
+PackState RetroLibrary::InspectFanFile(const std::string &path)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+        return PackState::Missing;
+    // u32 header size (little-endian), u8 directory count.
+    std::array<unsigned char, 5> header{};
+    in.read(reinterpret_cast<char *>(header.data()), static_cast<std::streamsize>(header.size()));
+    const std::uint64_t size = Storage::FileSize(path);
+    if (in.gcount() < static_cast<std::streamsize>(header.size()) || size < kMinimumPackBytes)
+        return PackState::Invalid;
+    const std::uint64_t headerSize = static_cast<std::uint64_t>(header[0]) | (static_cast<std::uint64_t>(header[1]) << 8)
+                                     | (static_cast<std::uint64_t>(header[2]) << 16) | (static_cast<std::uint64_t>(header[3]) << 24);
+    return headerSize > 5 && headerSize < size && header[4] > 0 ? PackState::Ready : PackState::Invalid;
+}
+
+std::vector<FanGame> RetroLibrary::ScanFan() const
+{
+    std::vector<FanGame> games;
+    const std::vector<std::string> folders = FanFolders();
+    for (const FanGameInfo &info : FanCatalogue()) {
+        FanGame game;
+        game.info = info;
+        for (std::size_t f = 0; f < folders.size(); ++f) {
+            const std::string path = folders[f] + "/" + info.fileName;
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(path, ec))
+                continue;
+            game.file.path  = path;
+            game.file.size  = Storage::FileSize(path);
+            game.file.onUsb = f > 0;
+            game.file.state = InspectFanFile(path);
+            break;
+        }
+        games.push_back(game);
+    }
+    return games;
+}
+
+bool RetroLibrary::AnyPlayable() const
+{
+    if (!ScanPlayable().empty())
+        return true;
+    for (const FanGame &game : ScanFan()) {
+        if (game.file.state == PackState::Ready)
+            return true;
+    }
+    return false;
 }
 
 std::vector<RetroGame> RetroLibrary::ScanPlayable() const

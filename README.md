@@ -22,6 +22,9 @@ forks ([RSDKv5-Decompilation-Plus](https://github.com/pustal/RSDKv5-Decompilatio
   slots, Sonic Origins' own music and sounds (uploaded from its files and converted on the
   TV), and Sonic Mania's filling what is left. The Plus menu's
   Games page switches between them and Sonic Mania. See [Retro games](#retro-games).
+- **Sonic Nexus.** Christian Whitehead's 2008 fan game plays too, from its own `Data.bin`
+  uploaded on the transfer page: it shows in the Games page's **Fan games** section. See
+  [Fan games](#fan-games).
 - **Achievements.** The game's 18 achievements unlock as you play (the engine records them
   in `Achievements.bin`, next to your saves). The menu lists them all, unlocked and locked,
   with how to get each one; each retro game has its own twelve.
@@ -221,6 +224,23 @@ How each game plays depends on what you upload:
   engine keeps them. The retro games no longer need turning on: they are offered whenever
   their packs are there.
 
+
+## Fan games
+
+The engine fork also runs **Sonic Nexus** (2008), a fan game by Christian Whitehead made
+with RSDKv2, the Retro Engine before Sonic CD's. The engine carries the RSDKv2
+decompilation without its own platform layer, so Sonic Nexus draws, sounds and reads the
+remote through the same engine as the other games, with the Plus menu over it.
+
+- Upload its `Data.bin` (any name) in the transfer page's **Fan games** section, to the TV
+  or a USB drive: it is stored as `fan/sonic-nexus.bin` (on a drive,
+  `SonicWebMania/fan/sonic-nexus.bin`), where you can also copy it yourself. Then choose
+  **Restart game**: the Plus menu's **Games** page shows a **Fan games** section with it
+  (the section only shows when it is installed).
+- It is a 320-pixel-wide game: it plays at that width, centred, with black bars at the sides.
+  It has no saves or achievements.
+- Sonic Mania is not needed for it: with only Sonic Nexus installed the app starts it.
+
 ## Mods
 
 The engine's mod loader (from the RSDKv5 decompilation) loads mods for Sonic Mania, and for
@@ -255,6 +275,7 @@ prints these figures every time):
 | Installed app (binary + bundled SDL2) | ~5 MiB |
 | Your `Data.rsdk` | the size of your file |
 | Retro game packs (optional, on the TV or a USB drive) | Origins 17-35 MiB each; earlier releases 43-75 MiB each |
+| Sonic Nexus (optional, on the TV or a USB drive) | ~10 MiB |
 | Sonic Origins' audio (optional) | the uploaded files ~380 MiB (removable once converted); converted packs ~30, 66 and 240 MiB |
 | Sonic Origins' videos (optional) | the uploaded files ~360 MiB (removable once converted); converted packs a few tens of MiB each |
 | Saves and settings | well under 1 MiB (time-attack replays add a little) |
@@ -334,7 +355,7 @@ src/port/
   RemoteInput.*             remote button mapping, Back for the Plus menu, menu navigation (setup screen)
   SettingsChannel.*         hands the page's settings changes to the engine's thread
   PlusFiles.*               reads the engine's Plus.ini / Settings.ini; moves a 2.x install's settings and saves
-  RetroGames.*              Sonic 1, 2 and CD: finds their packs (TV and USB) for the page and the setup screen
+  RetroGames.*              Sonic 1, 2 and CD, and the fan games (Sonic Nexus): finds their files (TV and USB) for the page and the setup screen
   ModLibrary.*              mods on the TV and USB drives, modconfig.ini, staged changes, links for the engine
   IniEdit.*                 rewrites Sonic Mania's pack path in Settings.ini before each start
   RsdkPack.*                looks inside packs; converts Sonic CD's 2011 pack

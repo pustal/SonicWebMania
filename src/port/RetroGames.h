@@ -35,6 +35,12 @@
  * same folders (main() adds the USB drives' with RSDK::Plus::AddPackFolder())
  * and keeps each game's saves in `<data>/retro/<game>/`. This class is what
  * the web page and the setup screen know of them.
+ *
+ * Fan games: games made with an earlier Retro Engine, which the engine runs
+ * on cores of their own (Sonic Nexus on RSDKv2, the engine's
+ * RSDK/Plus/PlusFan.cpp), from their own data file under a fixed name in a
+ * "fan" folder next to "retro": `<data>/fan/sonic-nexus.bin` on the TV,
+ * `SonicWebMania/fan/sonic-nexus.bin` on a USB drive.
  */
 #ifndef SWM_RETRO_GAMES_H
 #define SWM_RETRO_GAMES_H
@@ -81,6 +87,23 @@ struct RetroGameInfo {
 /** The games this port knows how to set up. */
 const std::vector<RetroGameInfo> &RetroCatalogue();
 
+/** A fan game of the catalogue (see the notes above). */
+struct FanGameInfo {
+    const char *id;       ///< Short id used in URLs, as the engine's Plus.ini names it ("nexus").
+    const char *title;    ///< Name shown to people.
+    const char *fileName; ///< Its data file's name in the "fan" folder ("sonic-nexus.bin").
+    const char *source;   ///< Where the file comes from, for the web page.
+};
+
+/** The fan games this port knows how to set up. */
+const std::vector<FanGameInfo> &FanCatalogue();
+
+/** A fan game and its data file, if found (Ready: it looks like the engine's format; Invalid: it does not). */
+struct FanGame {
+    FanGameInfo info{};
+    RetroPack file;
+};
+
 /** A game and the packs found for it. */
 struct RetroGame {
     RetroGameInfo info{};
@@ -115,6 +138,9 @@ public:
     /** Scans and returns only the games that can be played. */
     std::vector<RetroGame> ScanPlayable() const;
 
+    /** True when a retro game or a fan game can be played (the app needs no Sonic Mania then). */
+    bool AnyPlayable() const;
+
     /** @return The catalogue entry for @p id, or null for an unknown id. */
     static const RetroGameInfo *FindGame(const std::string &id);
 
@@ -145,6 +171,33 @@ public:
      * @return Number of packs installed.
      */
     int ApplyPendingPacks() const;
+
+    // ---- Fan games ----
+
+    /** Folder (inside the data directory, or inside kUsbFolderName on a drive) holding the fan games' files. */
+    static constexpr const char *kFanFolderName = "fan";
+
+    /** @return The fan catalogue's entry for @p id, or null for an unknown id. */
+    static const FanGameInfo *FindFanGame(const std::string &id);
+
+    /** `<data>/fan`: where fan games uploaded to the TV are kept. */
+    std::string TvFanFolder() const;
+
+    /** `<mount>/SonicWebMania/fan`: where they are kept on a USB drive. */
+    static std::string UsbFanFolder(const std::string &mountPoint);
+
+    /** Every folder fan games are kept in: the TV's, then each USB drive's (as PackFolders()). */
+    std::vector<std::string> FanFolders() const;
+
+    /** Looks for every fan game's file on the TV and the USB drives. */
+    std::vector<FanGame> ScanFan() const;
+
+    /**
+     * Classifies a fan game's data file: Ready when it starts like an RSDKv2
+     * data file (its header's size, then a directory count), as the engine
+     * checks it (PlusFan.cpp, LooksLikeFanData()).
+     */
+    static PackState InspectFanFile(const std::string &path);
 
 private:
     /** Fills @p pack from the first folder in @p folders that has @p fileName. */

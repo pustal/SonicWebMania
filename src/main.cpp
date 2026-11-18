@@ -140,7 +140,8 @@ Session session;
 
 /**
  * Every pack the engine may read this session (see TransferServer::SetPacksInUse()):
- * Sonic Mania's, the retro games' and their converted Sonic Origins audio and videos.
+ * Sonic Mania's, the retro games' and their converted Sonic Origins audio and videos,
+ * and the fan games' data files.
  */
 std::vector<std::string> PacksInUse(const std::string &maniaPack, const swm::RetroLibrary &retro)
 {
@@ -152,6 +153,10 @@ std::vector<std::string> PacksInUse(const std::string &maniaPack, const swm::Ret
             if (pack->state == swm::PackState::Ready || pack->state == swm::PackState::Unsupported)
                 packs.push_back(pack->path);
         }
+    }
+    for (const swm::FanGame &game : retro.ScanFan()) {
+        if (game.file.state == swm::PackState::Ready)
+            packs.push_back(game.file.path);
     }
     for (const std::string &folder : retro.PackFolders()) {
         for (const swm::RetroGameInfo &game : swm::RetroCatalogue()) {
@@ -201,8 +206,10 @@ void RequestRestart()
 /** Tells the Plus module what only the app knows: the USB drives' packs, the page's address, "Restart game". */
 void ConfigurePlus(const swm::RetroLibrary &retro, const swm::TransferServer *server)
 {
+    // [0] is the TV's, which the engine finds itself. The engine also finds the fan games'
+    // files in the "fan" folder next to each of these "retro" folders (SonicWebMania/fan).
     const std::vector<std::string> folders = retro.PackFolders();
-    for (std::size_t i = 1; i < folders.size(); ++i) // [0] is the TV's, which the engine finds itself.
+    for (std::size_t i = 1; i < folders.size(); ++i)
         RSDK::Plus::AddPackFolder(folders[i]);
 
     RSDK::Plus::PlatformTexts texts;
@@ -210,14 +217,14 @@ void ConfigurePlus(const swm::RetroLibrary &retro, const swm::TransferServer *se
     if (server && !address.empty()) {
         const std::string page = "http://" + address + ":" + std::to_string(server->Port());
         texts.menuInfo         = "Transfer page: " + page + "  PIN " + server->Pin();
-        texts.packHint         = "Add retro packs from the transfer page on a phone or computer: " + page
+        texts.packHint         = "Add retro packs and fan games from the transfer page on a phone or computer: " + page
                          + ". Then choose Restart game.";
         texts.originsAudioHint = "Upload them on the transfer page (" + page + "), then press OK here or Convert there.";
         texts.originsVideoHint = texts.originsAudioHint;
     }
     else {
         texts.menuInfo         = "Connect the TV to a network to reach the transfer page.";
-        texts.packHint         = "Add retro packs from the transfer page (the TV must be on a network), then choose Restart game.";
+        texts.packHint         = "Add retro packs and fan games from the transfer page (the TV must be on a network), then choose Restart game.";
         texts.originsAudioHint = "Upload them on the transfer page (the TV must be on a network), then press OK here.";
         texts.originsVideoHint = texts.originsAudioHint;
     }
@@ -286,7 +293,8 @@ int32 main(int32 argc, char *argv[])
     // Sonic Mania's pack, on the TV or a USB drive ("" when not installed). It is optional:
     // the app can be used for the retro games alone.
     std::string maniaPack = storage.DataPackPath();
-    const std::function<bool()> retroReady = [&retro] { return !retro.ScanPlayable().empty(); };
+    // A retro game or a fan game (Sonic Nexus) is enough to play without Sonic Mania.
+    const std::function<bool()> retroReady = [&retro] { return retro.AnyPlayable(); };
     if (maniaPack.empty() && !retroReady()) {
         server.SetSetupMode(true);
         const swm::SetupResult result = swm::RunSetupScreen(storage, serverRunning ? &server : nullptr, retroReady);
